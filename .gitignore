@@ -141,3 +141,13 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+
+
+# Terraform
+**/.terraform/*
+**/terraform.tfvars
+**/*.tfstate
+**/*.tfstate.*
+**/lambda.zip
+**/response.json

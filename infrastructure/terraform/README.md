@@ -1,0 +1,4 @@
+- **providers.tf** define con qué proveedor trabajamos, en nuestro caso AWS.
+- **variables.tf** guarda parámetros configurables como región o entorno; 
+- **main.tf** contendrá los recursos que vayamos creando;  
+- **outputs.tf** mostrará datos útiles después de desplegar, por ejemplo una URL o un identificador.
