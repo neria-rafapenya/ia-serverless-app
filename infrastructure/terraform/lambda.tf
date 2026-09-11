@@ -27,4 +27,10 @@ resource "aws_lambda_function" "api" {
   # Configuración mínima para desarrollo.
   memory_size = 128
   timeout     = 10
+  # Variables de entorno disponibles para el backend
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+    }
+  }
 }
