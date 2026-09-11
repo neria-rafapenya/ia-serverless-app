@@ -1,16 +1,47 @@
+import os
+
+
 # ============================================================
 # AI SERVICE
-# Capa de acceso a servicios de Inteligencia Artificial
+# Capa común de acceso a servicios de Inteligencia Artificial
 # ============================================================
 
 
-def generate_response(message: str) -> str:
+def generate_response(
+    message: str,
+    use_case: str = "general"
+) -> str:
     """
-    Genera una respuesta utilizando IA.
+    Genera una respuesta utilizando el proveedor de IA configurado.
 
-    Actualmente es una implementación simulada.
-    Más adelante esta función será el punto de entrada
-    para servicios como Amazon Bedrock.
+    use_case permite indicar quién está utilizando la IA:
+    - chat
+    - fridge
+    - document
+    - general
     """
 
-    return f"[IA simulada] Procesando: {message}"
+    provider = os.getenv("AI_PROVIDER", "mock")
+
+    if provider == "mock":
+        return _generate_mock_response(message, use_case)
+
+    raise ValueError(
+        f"Proveedor de IA no soportado: {provider}"
+    )
+
+
+def _generate_mock_response(
+    message: str,
+    use_case: str
+) -> str:
+    """
+    Implementación simulada.
+
+    No realiza ninguna llamada externa ni genera coste.
+    """
+
+    return (
+        f"[IA simulada][{use_case}] "
+        f"Procesando: {message}"
+    )

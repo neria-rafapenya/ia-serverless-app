@@ -34,6 +34,6 @@ def process_message(message: str) -> str:
     """
 
     if requires_ai(message):
-        return generate_response(message)
+                return generate_response(message, use_case="chat")
 
     return f"Mensaje recibido: {message}"
