@@ -142,7 +142,7 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-
+build/
 
 # Terraform
 **/.terraform/*
@@ -151,3 +151,6 @@ vite.config.ts.timestamp-*
 **/*.tfstate.*
 **/lambda.zip
 **/response.json
+
+.venv/
+.venv/*
