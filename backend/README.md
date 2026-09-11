@@ -57,7 +57,8 @@ backend/
 └── tests/
     ├── __init__.py
     ├── test_ai_service.py
-    └── test_chat_service.py
+    ├── test_chat_service.py
+    └── test_app.py
 ```
 
 ## app.py
@@ -225,7 +226,7 @@ cd backend
 pytest -v
 ```
 
-Actualmente hay cinco tests y todos pasan:
+Actualmente hay ocho tests y todos pasan:
 
 ``` text
 tests/test_ai_service.py
