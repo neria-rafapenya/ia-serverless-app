@@ -58,3 +58,15 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 }
+
+# ============================================================
+# Ruta HTTP
+# POST /api/chat -> Lambda
+# ============================================================
+
+resource "aws_apigatewayv2_route" "chat" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  route_key = "POST /api/chat"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
