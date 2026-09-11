@@ -13,8 +13,8 @@ depender de configuraciones manuales.
     nuestro caso usamos AWS y el provider `archive` para empaquetar el
     código de la Lambda.
 -   **variables.tf** contiene parámetros configurables como la región
-    AWS, el entorno, el nombre del proyecto y el email utilizado para
-    las alertas de presupuesto.
+    AWS, el entorno, el nombre del proyecto, el proveedor de IA
+    (`ai_provider`) y el email utilizado para las alertas de presupuesto.
 -   **main.tf** se reserva para recursos generales de infraestructura
     que iremos añadiendo a medida que evolucione el proyecto.
 -   **outputs.tf** expone datos útiles después de desplegar. Actualmente
@@ -28,8 +28,8 @@ depender de configuraciones manuales.
 -   **cloudwatch.tf** gestiona el grupo de logs de la Lambda en
     CloudWatch y configura una retención de 7 días.
 -   **api_gateway.tf** contiene la HTTP API, la integración API Gateway
-    → Lambda, la ruta `GET /health`, el permiso de invocación y el stage
-    `$default`.
+    → Lambda, las rutas `GET /health` y `POST /api/chat`, el permiso de
+    invocación y el stage `$default`.
 -   **terraform.tfvars** contiene valores concretos de variables para el
     entorno local. Este archivo no se versiona.
 -   **.terraform.lock.hcl** fija las versiones de los providers
@@ -43,14 +43,29 @@ Internet
    v
 API Gateway HTTP API
    |
-   | GET /health
+   +--> GET /health
+   |
+   +--> POST /api/chat
+   |
    v
 AWS Lambda
    |
    v
-Backend Python
+Mangum
    |
    v
+FastAPI
+   |
+   +--> health
+   |
+   +--> chat_service
+           |
+           v
+       ai_service
+           |
+           v
+     AI_PROVIDER=mock
+
 CloudWatch Logs
 ```
 
@@ -60,7 +75,7 @@ La URL de API Gateway puede consultarse con:
 terraform output api_url
 ```
 
-La ruta actual `GET /health` devuelve:
+La ruta `GET /health` devuelve:
 
 ``` json
 {
@@ -83,10 +98,61 @@ Configuración:
 Runtime: Python 3.12
 Memoria: 128 MB
 Timeout: 10 segundos
+ENVIRONMENT: dev
+AI_PROVIDER: mock
 ```
 
-El código está en `backend/lambda_function.py`. Terraform genera
-automáticamente el ZIP de despliegue, que no se guarda en Git.
+`AI_PROVIDER` se configura desde Terraform mediante `var.ai_provider`.
+El valor por defecto es `mock`, lo que evita llamadas reales a servicios
+de IA mientras no se active explícitamente otro proveedor.
+
+El punto de entrada Lambda está en `backend/lambda_function.py`, que
+utiliza Mangum para adaptar la aplicación FastAPI a AWS Lambda.
+
+Terraform empaqueta el contenido preparado en `build/lambda/` y genera
+el ZIP de despliegue, que no se guarda en Git.
+
+## Proveedor de IA configurable
+
+Terraform expone la variable:
+
+``` hcl
+variable "ai_provider" {
+  description = "Proveedor de IA utilizado por el backend"
+  type        = string
+  default     = "mock"
+}
+```
+
+La Lambda recibe esta configuración como variable de entorno:
+
+``` hcl
+environment {
+  variables = {
+    ENVIRONMENT = var.environment
+    AI_PROVIDER = var.ai_provider
+  }
+}
+```
+
+El backend obtiene después el valor mediante `AI_PROVIDER`.
+
+Actualmente:
+
+``` text
+ai_provider = "mock"
+```
+
+por lo que `services/ai_service.py` utiliza una implementación simulada
+y no realiza llamadas a Bedrock ni genera consumo de IA.
+
+Más adelante podrá cambiarse a otro proveedor mediante configuración,
+sin modificar `chat_service.py` ni las rutas HTTP.
+
+El objetivo es que distintos casos de uso reutilicen la misma capa de
+IA indicando su contexto mediante `use_case`, por ejemplo `chat`,
+`fridge` o `document`, mientras la lógica de negocio permanece en cada
+servicio específico.
 
 ## IAM
 
@@ -121,10 +187,11 @@ retention_in_days = 7
 Se ha creado una **API Gateway HTTP API** integrada mediante `AWS_PROXY`
 con la Lambda.
 
-Ruta:
+Rutas:
 
 ``` text
-GET /health
+GET  /health
+POST /api/chat
 ```
 
 Stage:
@@ -134,6 +201,24 @@ $default
 ```
 
 con `auto_deploy = true`.
+
+La ruta `POST /api/chat` ha sido validada de extremo a extremo. Con
+`AI_PROVIDER=mock`, una petición como:
+
+``` json
+{
+  "message": "Analiza este documento"
+}
+```
+
+devuelve actualmente:
+
+``` json
+{
+  "response": "[IA simulada][chat] Procesando: Analiza este documento",
+  "environment": "dev"
+}
+```
 
 ## AWS Budgets
 
@@ -170,7 +255,11 @@ Application Load Balancer
 NAT Gateway
 RDS
 OpenSearch
+Amazon Bedrock
 ```
+
+La configuración actual `AI_PROVIDER=mock` permite desarrollar y probar
+la integración de IA sin generar llamadas ni coste de modelo.
 
 Antes de incorporar nuevos servicios se revisará su impacto económico.
 
@@ -198,9 +287,17 @@ pero el perfil no está hardcodeado en Terraform.
 
 ## Flujo habitual de trabajo
 
-Antes de desplegar:
+Antes de desplegar cambios del backend se ejecutan primero los tests
+locales y se reconstruye el paquete Lambda:
 
 ``` bash
+cd backend
+pytest -v
+cd ..
+
+./scripts/build_lambda.sh
+
+cd infrastructure/terraform
 terraform fmt
 terraform validate
 terraform plan
@@ -215,6 +312,56 @@ Después:
 terraform apply
 ```
 
+## Último cambio validado
+
+Al añadir `AI_PROVIDER` a la configuración de la Lambda, Terraform
+mostró:
+
+``` text
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+El único cambio fue una actualización **in-place** de la Lambda:
+
+``` text
++ AI_PROVIDER = "mock"
+```
+
+No se creó ningún recurso nuevo ni se destruyó infraestructura.
+
+Después del `apply`, la prueba real mediante API Gateway devolvió:
+
+``` json
+{
+  "response": "[IA simulada][chat] Procesando: Analiza este documento",
+  "environment": "dev"
+}
+```
+
+Esto valida el recorrido:
+
+``` text
+API Gateway
+   |
+   v
+Lambda
+   |
+   v
+Mangum
+   |
+   v
+FastAPI
+   |
+   v
+chat_service
+   |
+   v
+ai_service
+   |
+   v
+AI_PROVIDER=mock
+```
+
 ## Estado actual
 
 ``` text
@@ -222,35 +369,48 @@ Terraform
     |
     +-- AWS Budget
     +-- IAM
-    +-- Lambda Python
+    +-- Lambda Python 3.12
+    |       |
+    |       +-- ENVIRONMENT
+    |       +-- AI_PROVIDER=mock
+    |
     +-- CloudWatch Logs
+    |
     +-- API Gateway HTTP API
             |
             +-- GET /health
+            |
+            +-- POST /api/chat
                     |
-                    +-- Lambda
+                    v
+                  Lambda
+                    |
+                    v
+              FastAPI + Mangum
 ```
 
-El backend serverless ya es accesible por HTTP a través de API Gateway.
+El backend serverless con FastAPI y Mangum ya es accesible por HTTP a
+través de API Gateway. La configuración del proveedor de IA también está
+gestionada explícitamente desde Terraform.
 
 ## Siguiente paso
 
-La siguiente evolución prevista es sustituir la Lambda Python mínima
-por:
+FastAPI, Mangum, `POST /api/chat` y la configuración de `AI_PROVIDER`
+ya están implementados.
+
+La siguiente evolución será preparar la integración con un proveedor de
+IA real, previsiblemente Amazon Bedrock, manteniendo `mock` como opción
+segura y fácilmente seleccionable por configuración.
+
+Antes de activar Bedrock se revisarán específicamente:
 
 ``` text
-FastAPI + Mangum
+coste por modelo y tokens
+permisos IAM mínimos
+límites y protección frente a consumo accidental
+configuración por entorno
+estrategia de pruebas
 ```
 
-manteniendo inicialmente AWS Lambda como entorno de ejecución
-serverless.
-
-Esto permitirá evolucionar hacia:
-
-``` text
-GET  /health
-POST /api/chat
-```
-
-y posteriormente integrar Amazon Bedrock, RAG y otros componentes de la
-arquitectura de IA.
+RAG y otros componentes de IA se incorporarán posteriormente y solo
+cuando aporten valor al caso de uso.

@@ -38,6 +38,7 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       ENVIRONMENT = var.environment
+      AI_PROVIDER = var.ai_provider
     }
   }
 }

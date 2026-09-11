@@ -21,3 +21,9 @@ variable "budget_alert_email" {
   description = "Email para recibir alertas de AWS Budgets"
   type        = string
 }
+
+variable "ai_provider" {
+  description = "Proveedor de IA utilizado por el backend"
+  type        = string
+  default     = "mock"
+}
