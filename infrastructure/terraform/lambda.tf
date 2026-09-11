@@ -8,8 +8,15 @@
 # ============================================================
 
 data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_file = "${path.module}/../../backend/lambda_function.py"
+  type = "zip"
+
+  # El directorio build/lambda contiene:
+  # - nuestro código Python
+  # - FastAPI
+  # - Mangum
+  # - dependencias compatibles con AWS Lambda
+  source_dir = "${path.module}/../../build/lambda"
+
   output_path = "${path.module}/lambda.zip"
 }
 
