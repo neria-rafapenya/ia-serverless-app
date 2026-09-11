@@ -2,7 +2,7 @@
 # CHAT SERVICE
 # Primera capa de orquestación del backend
 # ============================================================
-
+from services.ai_service import generate_response
 
 def requires_ai(message: str) -> bool:
     """
@@ -34,6 +34,6 @@ def process_message(message: str) -> str:
     """
 
     if requires_ai(message):
-        return "La petición requiere procesamiento de IA"
+        return generate_response(message)
 
     return f"Mensaje recibido: {message}"
