@@ -45,7 +45,9 @@ backend/
 ├── app.py
 ├── lambda_function.py
 ├── requirements.txt
-└── README.md
+├── README.md
+└── services/
+    └── chat_service.py
 ```
 
 ## app.py
@@ -363,5 +365,6 @@ Hasta este punto se ha completado:
 - nueva ruta correspondiente en API Gateway;
 - prueba real satisfactoria de `GET /health`;
 - prueba real satisfactoria de `POST /api/chat`.
+- separación de la lógica de chat en `services/chat_service.py`, iniciando la capa de servicios/orquestación del backend;
 
 Todavía no se ha añadido Bedrock, RAG ni ningún servicio de IA. La ruta de chat sigue siendo determinista y sirve para validar la arquitectura base antes de incorporar IA.

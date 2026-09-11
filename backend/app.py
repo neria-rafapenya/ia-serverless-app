@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-
+from services.chat_service import process_message
 
 app = FastAPI(
     title="ia-serverless-app API",
@@ -47,7 +47,9 @@ def health():
 def chat(request: ChatRequest):
     environment = os.getenv("ENVIRONMENT", "unknown")
 
+    response = process_message(request.message)
+
     return ChatResponse(
-        response=f"Mensaje recibido: {request.message}",
+        response=response,
         environment=environment
     )
