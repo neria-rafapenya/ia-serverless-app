@@ -9,9 +9,6 @@ import boto3
 # ============================================================
 
 
-DEFAULT_MODEL_ID = "eu.amazon.nova-micro-v1:0"
-
-
 def generate_text(
     message: str,
     use_case: str = "general"
@@ -20,10 +17,7 @@ def generate_text(
     Genera texto mediante Amazon Bedrock.
     """
 
-    model_id = os.getenv(
-        "BEDROCK_MODEL_ID",
-        DEFAULT_MODEL_ID
-    )
+    model_id = os.environ["BEDROCK_MODEL_ID"]
 
     client = boto3.client("bedrock-runtime")
 

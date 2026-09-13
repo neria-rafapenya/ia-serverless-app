@@ -15,6 +15,7 @@ data "archive_file" "lambda_zip" {
   # - FastAPI
   # - Mangum
   # - dependencias compatibles con AWS Lambda
+
   source_dir = "${path.module}/../../build/lambda"
 
   output_path = "${path.module}/lambda.zip"
@@ -34,11 +35,13 @@ resource "aws_lambda_function" "api" {
   # Configuración mínima para desarrollo.
   memory_size = 128
   timeout     = 10
+
   # Variables de entorno disponibles para el backend
   environment {
     variables = {
-      ENVIRONMENT = var.environment
-      AI_PROVIDER = var.ai_provider
+      ENVIRONMENT      = var.environment
+      AI_PROVIDER      = var.ai_provider
+      BEDROCK_MODEL_ID = var.bedrock_model_id
     }
   }
 }

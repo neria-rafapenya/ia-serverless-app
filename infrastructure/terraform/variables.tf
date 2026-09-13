@@ -27,3 +27,9 @@ variable "ai_provider" {
   type        = string
   default     = "mock"
 }
+
+variable "bedrock_model_id" {
+  description = "Identificador del modelo o perfil de inferencia utilizado por Amazon Bedrock"
+  type        = string
+  default     = "eu.amazon.nova-micro-v1:0"
+}

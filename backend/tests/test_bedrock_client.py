@@ -2,6 +2,13 @@ from clients.bedrock_client import generate_text
 
 
 def test_generate_text_uses_bedrock_converse(monkeypatch):
+
+    monkeypatch.setenv(
+        "BEDROCK_MODEL_ID",
+        "eu.amazon.nova-micro-v1:0"
+    )
+
+
     class FakeBedrockClient:
         def converse(self, **kwargs):
             assert kwargs["modelId"] == "eu.amazon.nova-micro-v1:0"

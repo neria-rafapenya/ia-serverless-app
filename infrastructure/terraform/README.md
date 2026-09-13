@@ -7,7 +7,7 @@ La infraestructura se gestiona mediante Terraform para que pueda recrearse de fo
 ## Archivos
 
 - **`providers.tf`** define los proveedores utilizados por Terraform. Se utilizan AWS y el provider `archive` para empaquetar el código de la Lambda.
-- **`variables.tf`** contiene parámetros configurables como la región AWS, el entorno, el nombre del proyecto, el proveedor de IA (`ai_provider`) y el email utilizado para las alertas de presupuesto.
+- **`variables.tf`** contiene parámetros configurables como la región AWS, el entorno, el nombre del proyecto, el proveedor de IA (`ai_provider`), el modelo Bedrock (`bedrock_model_id`) y el email utilizado para las alertas de presupuesto.
 - **`main.tf`** se reserva para recursos generales de infraestructura que se irán añadiendo a medida que evolucione el proyecto.
 - **`outputs.tf`** expone datos útiles después del despliegue. Actualmente muestra la URL pública de API Gateway.
 - **`budget.tf`** crea un presupuesto mensual de AWS con alertas para controlar el gasto de la cuenta.
@@ -88,6 +88,7 @@ Memoria: 128 MB
 Timeout: 10 segundos
 ENVIRONMENT: dev
 AI_PROVIDER: mock
+BEDROCK_MODEL_ID: eu.amazon.nova-micro-v1:0
 ```
 
 `AI_PROVIDER` se configura desde Terraform mediante `var.ai_provider`.
@@ -121,8 +122,9 @@ La Lambda recibe esta configuración como variable de entorno:
 ```hcl
 environment {
   variables = {
-    ENVIRONMENT = var.environment
-    AI_PROVIDER = var.ai_provider
+    ENVIRONMENT      = var.environment
+    AI_PROVIDER      = var.ai_provider
+    BEDROCK_MODEL_ID = var.bedrock_model_id
   }
 }
 ```
@@ -138,6 +140,27 @@ ai_provider = "mock"
 por lo que `services/ai_service.py` sigue utilizando la implementación simulada en el entorno desplegado.
 
 La rama `bedrock` ya está implementada en el backend, pero todavía no está activada como proveedor efectivo.
+
+
+### Modelo Bedrock configurable
+
+Terraform expone también:
+
+```hcl
+variable "bedrock_model_id" {
+  description = "Identificador del modelo o perfil de inferencia utilizado por Amazon Bedrock"
+  type        = string
+  default     = "eu.amazon.nova-micro-v1:0"
+}
+```
+
+La Lambda recibe este valor como `BEDROCK_MODEL_ID`. El backend ya no contiene un fallback hardcodeado del modelo; `bedrock_client.py` exige la variable con:
+
+```python
+os.environ["BEDROCK_MODEL_ID"]
+```
+
+Esto hace explícita la configuración por entorno y mejora la portabilidad.
 
 ## Integración preparada con Amazon Bedrock
 
@@ -351,7 +374,7 @@ IAM mínimo
 tests sin llamadas AWS reales
 ```
 
-El límite de 4000 caracteres está preparado localmente en el backend, pero todavía está pendiente de tests, build y despliegue.
+El límite de 4000 caracteres ya está cubierto por tests, reconstruido, desplegado y validado mediante API Gateway. Un mensaje vacío devuelve HTTP `422` antes de llegar al proveedor de IA.
 
 ## Portabilidad
 
@@ -426,36 +449,34 @@ terraform apply
 
 ## Último cambio validado
 
-La preparación de Bedrock produjo este plan:
+Tras externalizar el modelo Bedrock a Terraform, el plan produjo:
 
 ```text
-Plan: 1 to add, 1 to change, 0 to destroy.
+Plan: 0 to add, 1 to change, 0 to destroy.
 ```
 
-Los cambios fueron:
+El único cambio fue una actualización **in-place** de:
 
 ```text
-+ aws_iam_role_policy.lambda_bedrock
 ~ aws_lambda_function.api
 ```
 
-La policy IAM nueva permite la invocación controlada de Nova Micro.
-
-La Lambda se actualizó **in-place** porque cambió `source_code_hash` al reconstruirse el paquete con:
+Terraform detectó:
 
 ```text
-boto3
-clients/bedrock_client.py
-nueva lógica de ai_service.py
++ BEDROCK_MODEL_ID = eu.amazon.nova-micro-v1:0
+~ source_code_hash
 ```
+
+El `source_code_hash` cambió porque se reconstruyó el paquete después de eliminar el fallback hardcodeado del modelo en Python.
 
 El apply terminó con:
 
 ```text
-Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
 ```
 
-No se destruyó ningún recurso.
+No se creó ni destruyó ningún recurso.
 
 ## Validación posterior al despliegue
 
@@ -503,6 +524,16 @@ AI_PROVIDER=mock
 
 Aunque la Lambda ya dispone de código y permisos Bedrock, no se activa el modelo mientras `AI_PROVIDER` permanezca en `mock`.
 
+
+También se validó la barrera de entrada desplegada:
+
+```text
+mensaje válido -> 200
+mensaje vacío  -> 422
+```
+
+Después de añadir `BEDROCK_MODEL_ID` a la Lambda, se repitió la petición con `"Analiza este documento"` y la respuesta continuó siendo la simulada, confirmando que el proveedor efectivo sigue siendo `mock`.
+
 ## Estado actual
 
 ```text
@@ -521,6 +552,7 @@ Terraform
     |       |
     |       +-- ENVIRONMENT
     |       +-- AI_PROVIDER=mock
+    |       +-- BEDROCK_MODEL_ID=eu.amazon.nova-micro-v1:0
     |       +-- boto3
     |       +-- Bedrock client preparado
     |
@@ -550,23 +582,24 @@ Terraform
 
 ## Siguiente paso
 
-La integración básica con Bedrock ya no es solo una idea: el código, el cliente y los permisos IAM están preparados.
+La integración básica con Bedrock ya tiene preparados código, cliente, configuración explícita del modelo, permisos IAM, tests y despliegue. `AI_PROVIDER` continúa en `mock`.
 
-Sin embargo, `AI_PROVIDER` continúa en `mock`.
+El full suite del backend se ha validado con:
+
+```text
+12 passed, 1 warning
+```
+
+El límite de entrada de 1 a 4000 caracteres ya está desplegado y un mensaje vacío se ha validado con respuesta HTTP `422`.
 
 Antes de activar Bedrock real quedan estos pasos:
 
 ```text
-1. terminar los tests del límite de entrada 1-4000 caracteres;
-2. ejecutar el full suite del backend;
-3. reconstruir la Lambda;
-4. ejecutar terraform fmt / validate / plan;
-5. desplegar el límite de entrada;
-6. revisar nuevamente el impacto económico;
-7. cambiar AI_PROVIDER a bedrock de forma controlada;
-8. realizar una primera invocación real;
-9. comprobar respuesta, logs y coste;
-10. volver a mock si no se necesita mantener Bedrock activo.
+1. revisar nuevamente el impacto económico;
+2. no activar Bedrock directamente sobre el endpoint público sin protección;
+3. realizar una primera invocación real de forma controlada;
+4. comprobar respuesta, logs y coste;
+5. volver a mock cuando no sea necesario mantener Bedrock activo.
 ```
 
 El cliente Bedrock ya limita la salida mediante:

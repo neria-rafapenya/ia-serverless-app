@@ -133,7 +133,7 @@ La ruta delega en `services/chat_service.py`, que decide si la petición requier
 
 ### Validación de entrada
 
-Estado local actual:
+Estado desplegado y validado en AWS:
 
 ```python
 from pydantic import BaseModel, Field
@@ -154,7 +154,7 @@ Con esto FastAPI rechaza mensajes vacíos y mensajes de más de 4000 caracteres 
 
 El límite de 4000 caracteres es también una medida básica de control de coste.
 
-> Este cambio de validación está preparado localmente y todavía está pendiente de tests, build y despliegue.
+> Este control ya está cubierto por tests y desplegado en AWS. Se validó mediante API Gateway que un mensaje vacío devuelve HTTP `422`.
 
 ## Capa de servicios
 
@@ -198,10 +198,16 @@ Cuando `AI_PROVIDER=bedrock`, la capa delega en `clients/bedrock_client.py`.
 
 Cliente específico para Amazon Bedrock.
 
-Configuración actual:
+El identificador del modelo ya no está hardcodeado en Python. Se obtiene obligatoriamente desde la variable de entorno:
 
 ```python
-DEFAULT_MODEL_ID = "eu.amazon.nova-micro-v1:0"
+model_id = os.environ["BEDROCK_MODEL_ID"]
+```
+
+Terraform define actualmente como valor por defecto:
+
+```text
+eu.amazon.nova-micro-v1:0
 ```
 
 El primer modelo preparado es **Amazon Nova Micro** mediante el perfil europeo:
@@ -322,7 +328,7 @@ tests/test_ai_service.py
 └── rama bedrock mockeada
 
 tests/test_bedrock_client.py
-└── llamada Converse mockeada
+└── llamada Converse mockeada y modelo recibido mediante BEDROCK_MODEL_ID
 
 tests/test_chat_service.py
 ├── mensaje que no requiere IA
@@ -331,30 +337,27 @@ tests/test_chat_service.py
 tests/test_app.py
 ├── GET /health
 ├── POST /api/chat sin IA
-└── POST /api/chat con IA mock
+├── POST /api/chat con IA mock
+├── rechazo de mensaje vacío
+└── rechazo de mensaje superior a 4000 caracteres
 ```
 
-Validación específica de la preparación Bedrock:
+Validación completa actual:
 
 ```bash
-pytest tests/test_ai_service.py tests/test_bedrock_client.py -v
+cd backend
+pytest -v
 ```
 
 Resultado confirmado:
 
 ```text
-5 passed
+12 passed, 1 warning in 0.27s
 ```
 
-Estos tests no necesitan credenciales AWS ni realizan llamadas reales a Bedrock.
+El warning procede de una deprecación de `anyio.abc.BlockingPortal` utilizada por `starlette.testclient`; no bloquea el funcionamiento actual.
 
-Antes de incorporar Bedrock, el full suite había sido validado con:
-
-```text
-8 passed, 1 warning
-```
-
-No se documenta todavía un resultado posterior del full suite completo hasta volver a ejecutarlo.
+Los tests de Bedrock están mockeados, no necesitan credenciales AWS y no realizan llamadas reales al modelo.
 
 ## Entorno virtual
 
@@ -489,26 +492,32 @@ Antes de cada `apply` hay que revisar siempre los recursos que se crean, modific
 
 ## Último despliegue validado
 
-El plan de preparación de Bedrock mostró:
+Después de externalizar `BEDROCK_MODEL_ID`, el plan mostró:
 
 ```text
-Plan: 1 to add, 1 to change, 0 to destroy.
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+El cambio fue únicamente una actualización **in-place** de la Lambda:
+
+```text
+~ aws_lambda_function.api
+```
+
+Motivos:
+
+```text
+- nuevo source_code_hash tras reconstruir el ZIP;
+- nueva variable de entorno BEDROCK_MODEL_ID.
 ```
 
 El apply terminó con:
 
 ```text
-Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
 ```
 
-Cambios:
-
-```text
-+ aws_iam_role_policy.lambda_bedrock
-~ aws_lambda_function.api
-```
-
-No se creó una nueva Lambda ni infraestructura persistente adicional.
+No se creó ni destruyó ningún recurso.
 
 ## Prueba E2E posterior
 
@@ -529,6 +538,23 @@ Respuesta obtenida:
 ```
 
 Esto confirma que el entorno desplegado sigue utilizando `mock`. Tener código y permisos de Bedrock preparados no activa llamadas al modelo automáticamente.
+
+También se validó el control de entrada desplegado:
+
+```bash
+curl -i -X POST \
+  https://h9lsg64yy3.execute-api.eu-west-1.amazonaws.com/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":""}'
+```
+
+Resultado confirmado:
+
+```text
+HTTP/2 422
+```
+
+Posteriormente, tras externalizar `BEDROCK_MODEL_ID`, se volvió a probar `/api/chat` y continuó respondiendo en modo `mock` correctamente.
 
 ## Control de costes
 
@@ -553,7 +579,7 @@ El diseño evita acoplarse a una cuenta AWS concreta:
 - build reproducible para Python 3.12/Linux x86_64;
 - proveedor IA seleccionado mediante `AI_PROVIDER`.
 
-Como mejora posterior, conviene mover también la selección del modelo Bedrock completamente a Terraform y eliminar el fallback hardcodeado de Python.
+La selección del modelo Bedrock ya está externalizada completamente: Terraform define `bedrock_model_id`, Lambda recibe `BEDROCK_MODEL_ID` y Python exige esa variable mediante `os.environ` sin fallback silencioso.
 
 ## Estado actual
 
@@ -575,18 +601,20 @@ Completado:
 - IAM least privilege para Bedrock;
 - despliegue satisfactorio;
 - E2E validado todavía en `mock`;
-- límite local de entrada de 1 a 4000 caracteres;
+- límite de entrada de 1 a 4000 caracteres probado y desplegado;
+- respuesta HTTP 422 validada para mensaje vacío;
+- full suite validado con 12 tests;
+- `BEDROCK_MODEL_ID` externalizado a Terraform/Lambda;
 - límite de salida de 300 tokens.
 
 Pendiente antes de la primera llamada real a Bedrock:
 
 ```text
-1. añadir tests para min_length y max_length;
-2. ejecutar el full suite;
-3. reconstruir la Lambda;
-4. revisar terraform plan;
-5. desplegar el límite de entrada;
-6. hacer una primera invocación real y controlada a Bedrock.
+1. revisar nuevamente el impacto económico;
+2. evitar activar Bedrock directamente sobre un endpoint público sin protección;
+3. realizar una primera invocación real de forma controlada;
+4. revisar respuesta, logs y coste;
+5. mantener AI_PROVIDER=mock como valor seguro cuando no se necesite Bedrock.
 ```
 
 RAG todavía no se ha incorporado. Se añadirá en una fase posterior.
