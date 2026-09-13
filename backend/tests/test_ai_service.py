@@ -39,3 +39,18 @@ def test_generate_response_raises_error_for_unknown_provider(monkeypatch):
             message="Hola",
             use_case="chat"
         )
+
+def test_generate_response_uses_bedrock_branch(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "bedrock")
+
+    monkeypatch.setattr(
+        "services.ai_service.generate_text",
+        lambda message, use_case: "Respuesta Bedrock simulada"
+    )
+
+    response = generate_response(
+        message="Analiza este documento",
+        use_case="chat"
+    )
+
+    assert response == "Respuesta Bedrock simulada"

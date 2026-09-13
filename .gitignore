@@ -154,3 +154,11 @@ build/
 
 .venv/
 .venv/*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
