@@ -1,7 +1,7 @@
 import os
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from services.chat_service import process_message
 
 app = FastAPI(
@@ -16,8 +16,11 @@ app = FastAPI(
 # ============================================================
 
 class ChatRequest(BaseModel):
-    message: str
-
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000
+    )
 
 class ChatResponse(BaseModel):
     response: str
@@ -40,7 +43,8 @@ def health():
 # ============================================================
 # CHAT
 # Primera ruta funcional.
-# Todavía no utiliza IA: devuelve una respuesta controlada.
+# Procesa el mensaje y delega en el servicio de chat.
+# El servicio decide si la petición requiere IA.
 # ============================================================
 
 @app.post("/api/chat", response_model=ChatResponse)

@@ -1,14 +1,12 @@
-# Backend --- ia-serverless-app
+# Backend — ia-serverless-app
 
 Este directorio contiene el backend de `ia-serverless-app`.
 
-El backend se construye como una API Python con **FastAPI**, ejecutada
-de forma serverless en **AWS Lambda**. **Mangum** actúa como adaptador
-entre Lambda/API Gateway y la aplicación ASGI de FastAPI.
+El backend se implementa con **FastAPI** y se ejecuta de forma serverless en **AWS Lambda**. **Mangum** actúa como adaptador entre API Gateway/Lambda y la aplicación ASGI.
 
 ## Arquitectura actual
 
-``` text
+```text
 Internet
    |
    v
@@ -26,30 +24,57 @@ FastAPI
    +--> GET /health
    |
    +--> POST /api/chat
+            |
+            v
+      chat_service.py
+            |
+      +-----+------------------+
+      |                        |
+      v                        v
+flujo determinista        ai_service.py
+                               |
+                      +--------+--------+
+                      |                 |
+                      v                 v
+                    mock             bedrock
+                                        |
+                                        v
+                               bedrock_client.py
+                                        |
+                                        v
+                             Amazon Bedrock Converse
+                                        |
+                                        v
+                               Amazon Nova Micro
 ```
 
-Actualmente esta arquitectura está desplegada y ambas rutas han sido
-probadas correctamente.
+La integración con Bedrock ya está preparada en código e IAM, pero el entorno desplegado continúa utilizando `AI_PROVIDER=mock`.
 
 ## Versiones actuales
 
-``` text
-Python   3.12
-FastAPI  0.141.1
-Mangum   0.22.0
+```text
+Python    3.12
+FastAPI   0.141.1
+Mangum    0.22.0
+boto3     1.43.93
+pytest    8.4.2
+httpx2    2.12.0
 ```
 
 AWS Lambda utiliza el runtime `python3.12`.
 
 ## Estructura
 
-``` text
+```text
 backend/
 ├── app.py
 ├── lambda_function.py
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── README.md
+├── clients/
+│   ├── __init__.py
+│   └── bedrock_client.py
 ├── services/
 │   ├── __init__.py
 │   ├── ai_service.py
@@ -57,90 +82,87 @@ backend/
 └── tests/
     ├── __init__.py
     ├── test_ai_service.py
+    ├── test_bedrock_client.py
     ├── test_chat_service.py
     └── test_app.py
 ```
 
-## app.py
+## `app.py`
 
 Contiene la aplicación FastAPI, los modelos Pydantic y las rutas HTTP.
 
-### GET /health
+### `GET /health`
 
-Comprueba que la API está funcionando.
+Respuesta esperada:
 
-Respuesta actual:
-
-``` json
+```json
 {
   "message": "ia-serverless-app funcionando",
   "environment": "dev"
 }
 ```
 
-El entorno no está hardcodeado. Se obtiene con:
+El entorno se obtiene con:
 
-``` python
+```python
 os.getenv("ENVIRONMENT", "unknown")
 ```
 
-Terraform configura `ENVIRONMENT` utilizando `var.environment`.
+Terraform configura `ENVIRONMENT` mediante `var.environment`.
 
-### POST /api/chat
-
-Primera ruta funcional del backend.
+### `POST /api/chat`
 
 Entrada:
 
-``` json
+```json
 {
-  "message": "Hola desde FastAPI"
+  "message": "Analiza este documento"
 }
 ```
 
-Salida:
+Mientras `AI_PROVIDER=mock`, la respuesta es:
 
-``` json
+```json
 {
   "response": "[IA simulada][chat] Procesando: Analiza este documento",
   "environment": "dev"
 }
 ```
 
-La ruta delega la lógica en `services/chat_service.py`. Este servicio
-decide si la petición requiere IA y, cuando corresponde, utiliza la capa
-común `services/ai_service.py`.
+La ruta delega en `services/chat_service.py`, que decide si la petición requiere IA.
 
-Actualmente `ai_service.py` utiliza por defecto el proveedor `mock`, por
-lo que **todavía no se realizan llamadas reales a Bedrock ni se genera
-coste de IA**. Para esta ruta se utiliza `use_case="chat"`.
+### Validación de entrada
 
-El contrato está tipado mediante Pydantic:
+Estado local actual:
 
-``` python
+```python
+from pydantic import BaseModel, Field
+
 class ChatRequest(BaseModel):
-    message: str
-
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000
+    )
 
 class ChatResponse(BaseModel):
     response: str
     environment: str
 ```
 
-Esto permite que FastAPI valide automáticamente la estructura de entrada
-y salida.
+Con esto FastAPI rechaza mensajes vacíos y mensajes de más de 4000 caracteres antes de llegar a la lógica de negocio o al proveedor de IA.
+
+El límite de 4000 caracteres es también una medida básica de control de coste.
+
+> Este cambio de validación está preparado localmente y todavía está pendiente de tests, build y despliegue.
 
 ## Capa de servicios
 
-La lógica de negocio y orquestación se separa de las rutas HTTP mediante
-`backend/services/`.
+### `chat_service.py`
 
-### chat_service.py
+Contiene la lógica específica del chat.
 
-Contiene la lógica específica del chat. Decide si un mensaje requiere
-procesamiento de IA y, cuando es necesario, delega en `ai_service.py`.
-
-``` text
+```text
 POST /api/chat
       |
       v
@@ -151,150 +173,229 @@ chat_service.py
       +--> ai_service.py (use_case="chat")
 ```
 
-### ai_service.py
+La detección inicial utiliza palabras clave como `explica`, `resume`, `analiza`, `recomienda` e `interpreta`.
 
-Es la capa común y reutilizable de acceso a servicios de Inteligencia
-Artificial. Recibe `message` y `use_case`, y obtiene el proveedor
-mediante `AI_PROVIDER`.
+### `ai_service.py`
 
-``` python
+Es la capa común y reutilizable de acceso a servicios de Inteligencia Artificial.
+
+```python
 provider = os.getenv("AI_PROVIDER", "mock")
 ```
 
-Si la variable no existe, utiliza `mock` por defecto. Actualmente solo
-está implementado `mock`, que no realiza llamadas externas ni genera
-coste de IA.
+Proveedores implementados:
 
-``` text
-chat_service.py     --> ai_service.py --> proveedor IA
-fridge_service.py   --> ai_service.py --> proveedor IA
-document_service.py --> ai_service.py --> proveedor IA
+```text
+mock
+bedrock
 ```
 
-La lógica de negocio específica permanece en cada servicio.
+`mock` sigue siendo el valor por defecto y no realiza llamadas externas ni genera coste de IA.
 
-## lambda_function.py
+Cuando `AI_PROVIDER=bedrock`, la capa delega en `clients/bedrock_client.py`.
 
-Es el punto de entrada de AWS Lambda y conecta Lambda con FastAPI
-mediante Mangum:
+## `clients/bedrock_client.py`
 
-``` python
+Cliente específico para Amazon Bedrock.
+
+Configuración actual:
+
+```python
+DEFAULT_MODEL_ID = "eu.amazon.nova-micro-v1:0"
+```
+
+El primer modelo preparado es **Amazon Nova Micro** mediante el perfil europeo:
+
+```text
+eu.amazon.nova-micro-v1:0
+```
+
+La llamada utiliza `boto3` y la API `Converse`:
+
+```python
+client = boto3.client("bedrock-runtime")
+
+response = client.converse(
+    modelId=model_id,
+    messages=[
+        {
+            "role": "user",
+            "content": [{"text": message}]
+        }
+    ],
+    inferenceConfig={
+        "maxTokens": 300,
+        "temperature": 0.2,
+    }
+)
+```
+
+### Controles de coste de inferencia
+
+Actualmente existen dos límites complementarios:
+
+```text
+Entrada API  -> máximo 4000 caracteres
+Salida LLM   -> máximo 300 tokens
+```
+
+Además, `AI_PROVIDER=mock` continúa siendo el valor seguro por defecto.
+
+No se utiliza Provisioned Throughput ni capacidad reservada de Bedrock.
+
+## Estado de Bedrock
+
+Ya está preparado:
+
+- cliente Bedrock mediante `boto3`;
+- Amazon Nova Micro;
+- API `Converse`;
+- rama `AI_PROVIDER=bedrock`;
+- tests mockeados sin llamadas AWS;
+- empaquetado del directorio `clients/`;
+- permisos IAM mínimos para `bedrock:InvokeModel`;
+- perfil de inferencia europeo;
+- despliegue del código y permisos.
+
+El entorno desplegado continúa con:
+
+```text
+AI_PROVIDER = mock
+```
+
+Por tanto, todavía no consta una invocación real satisfactoria a Bedrock desde la aplicación.
+
+## `lambda_function.py`
+
+Punto de entrada de AWS Lambda:
+
+```python
 from mangum import Mangum
 from app import app
 
 lambda_handler = Mangum(app)
 ```
 
-La lógica HTTP permanece en FastAPI y `lambda_function.py` actúa
-únicamente como adaptador.
+## Dependencias
 
-## requirements.txt
+### `requirements.txt`
 
-Dependencias directas:
-
-``` text
+```text
 fastapi==0.141.1
 mangum==0.22.0
+boto3==1.43.93
 ```
 
-Las dependencias transitivas, como Pydantic o Starlette, son resueltas
-automáticamente por `pip`.
+`boto3` se declara explícitamente para hacer reproducible la versión utilizada por `bedrock_client.py`.
 
-## requirements-dev.txt
+### `requirements-dev.txt`
 
-Las herramientas de desarrollo local se mantienen separadas de las
-dependencias empaquetadas en Lambda:
-
-``` text
+```text
 -r requirements.txt
 
 pytest==8.4.2
+httpx2==2.12.0
 ```
 
 Instalación:
 
-``` bash
+```bash
 python -m pip install -r backend/requirements-dev.txt
 ```
 
-## Tests locales con pytest
+## Tests locales
 
-Antes de construir y desplegar:
+Ejecución completa:
 
-``` bash
+```bash
 cd backend
 pytest -v
 ```
 
-Actualmente hay ocho tests y todos pasan:
+Cobertura relevante:
 
-``` text
+```text
 tests/test_ai_service.py
 ├── proveedor mock por defecto
 ├── propagación de use_case
-└── error ante proveedor no soportado
+├── error ante proveedor no soportado
+└── rama bedrock mockeada
+
+tests/test_bedrock_client.py
+└── llamada Converse mockeada
 
 tests/test_chat_service.py
 ├── mensaje que no requiere IA
 └── mensaje que requiere IA
+
+tests/test_app.py
+├── GET /health
+├── POST /api/chat sin IA
+└── POST /api/chat con IA mock
 ```
 
-Resultado validado:
+Validación específica de la preparación Bedrock:
 
-``` text
+```bash
+pytest tests/test_ai_service.py tests/test_bedrock_client.py -v
+```
+
+Resultado confirmado:
+
+```text
 5 passed
 ```
 
-Los tests que modifican `AI_PROVIDER` utilizan `monkeypatch` para aislar
-las variables de entorno entre pruebas.
+Estos tests no necesitan credenciales AWS ni realizan llamadas reales a Bedrock.
 
-Flujo recomendado:
+Antes de incorporar Bedrock, el full suite había sido validado con:
 
-``` text
-cambio backend -> pytest local -> build_lambda.sh -> terraform plan -> apply -> prueba E2E AWS
+```text
+8 passed, 1 warning
 ```
+
+No se documenta todavía un resultado posterior del full suite completo hasta volver a ejecutarlo.
 
 ## Entorno virtual
 
-El entorno virtual se crea desde la **raíz del proyecto**:
+Desde la raíz del proyecto:
 
-``` bash
+```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python --version
-pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt
 ```
 
-Debe utilizar Python 3.12.
-
-El directorio `.venv/` es local y no se versiona en Git.
+El directorio `.venv/` no se versiona.
 
 ## Build para AWS Lambda
 
-El proyecto dispone de:
+El script es:
 
-``` text
+```text
 scripts/build_lambda.sh
 ```
 
-Se ejecuta desde la **raíz del proyecto**:
+Se ejecuta desde la raíz:
 
-``` bash
+```bash
 ./scripts/build_lambda.sh
 ```
 
 El script:
 
-1.  limpia el build anterior;
-2.  crea `build/lambda/`;
-3.  instala las dependencias para **Python 3.12 / Linux x86_64**;
-4.  copia `app.py`;
-5.  copia `lambda_function.py`;
-6.  copia el directorio completo `services/`.
+1. limpia el build anterior;
+2. crea `build/lambda/`;
+3. instala dependencias para Python 3.12 / Linux x86_64;
+4. copia `app.py`;
+5. copia `lambda_function.py`;
+6. copia `services/`;
+7. copia `clients/`.
 
-El resultado es similar a:
+Resultado aproximado:
 
-``` text
+```text
 build/lambda/
 ├── app.py
 ├── lambda_function.py
@@ -302,148 +403,116 @@ build/lambda/
 │   ├── __init__.py
 │   ├── ai_service.py
 │   └── chat_service.py
+├── clients/
+│   ├── __init__.py
+│   └── bedrock_client.py
+├── boto3/
+├── botocore/
 ├── fastapi/
 ├── mangum/
-├── pydantic/
-├── pydantic_core/
-├── starlette/
 └── ...
 ```
 
-`build/` es generado automáticamente y no se versiona en Git.
+`build/` es generado automáticamente y no se versiona.
 
-Terraform comprime este directorio para crear el paquete ZIP desplegado
-en AWS Lambda.
+Debe ejecutarse de nuevo antes de `terraform plan` cuando cambien:
 
-## ¿Cuándo ejecutar build_lambda.sh?
-
-Debe volver a ejecutarse antes de `terraform plan` cuando cambie alguno
-de estos archivos:
-
-``` text
+```text
 backend/app.py
 backend/lambda_function.py
 backend/requirements.txt
 backend/services/*.py
+backend/clients/*.py
 ```
-
-Flujo:
-
-``` text
-Cambiar backend
-      |
-      v
-./scripts/build_lambda.sh
-      |
-      v
-build/lambda/
-      |
-      v
-Terraform
-      |
-      v
-AWS Lambda
-```
-
-Es importante ejecutar el build **antes de `terraform plan`**, porque
-Terraform empaqueta el contenido existente en `build/lambda/`.
 
 ## API Gateway
 
-Actualmente API Gateway expone dos rutas:
+Rutas actuales:
 
-``` text
+```text
 GET  /health
 POST /api/chat
 ```
 
-Ambas utilizan la misma integración con la misma Lambda.
+Ambas utilizan la misma Lambda.
 
-La ruta de chat está definida en Terraform mediante un recurso
-equivalente a:
+## IAM para Bedrock
 
-``` hcl
-resource "aws_apigatewayv2_route" "chat" {
-  api_id = aws_apigatewayv2_api.api.id
+La Lambda dispone ya de una policy específica para Bedrock con enfoque least privilege.
 
-  route_key = "POST /api/chat"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-}
+Permiso:
+
+```text
+bedrock:InvokeModel
 ```
 
-FastAPI decide después qué función debe ejecutar en función del método
-HTTP y la ruta recibida.
+Se aplica al perfil de inferencia europeo de Nova Micro y a los foundation models asociados.
 
-## Onboarding
+El account ID no se hardcodea. Terraform lo obtiene mediante:
 
-Después de clonar el repositorio:
+```hcl
+data "aws_caller_identity" "current" {}
+```
 
-``` bash
-# Desde la raíz de ia-serverless-app
+Esto mantiene la infraestructura portable entre cuentas AWS.
 
-python3.12 -m venv .venv
-source .venv/bin/activate
+Añadir la policy IAM no genera consumo de Bedrock por sí mismo.
 
-pip install -r backend/requirements-dev.txt
+## Flujo de desarrollo recomendado
 
-cd backend
-pytest -v
-cd ..
-
-./scripts/build_lambda.sh
-
-cd infrastructure/terraform
-
-terraform init
+```text
+cambio backend
+      |
+      v
+pytest local
+      |
+      v
+build_lambda.sh
+      |
+      v
 terraform validate
+      |
+      v
 terraform plan
-```
-
-Antes de ejecutar:
-
-``` bash
+      |
+      v
+revisión de cambios y coste
+      |
+      v
 terraform apply
+      |
+      v
+prueba E2E AWS
 ```
 
-se debe revisar siempre:
-
-``` text
-recursos que se crean
-recursos que se modifican
-recursos que se destruyen
-posible impacto económico
-```
-
-La autenticación y configuración AWS/Terraform se documentan en la
-documentación de infraestructura.
+Antes de cada `apply` hay que revisar siempre los recursos que se crean, modifican o destruyen y su posible impacto económico.
 
 ## Último despliegue validado
 
-En el último cambio validado, correspondiente a la incorporación de
-`ai_service.py` reutilizable y `use_case`, el plan de Terraform mostró:
+El plan de preparación de Bedrock mostró:
 
-``` text
-Plan: 0 to add, 1 to change, 0 to destroy.
+```text
+Plan: 1 to add, 1 to change, 0 to destroy.
 ```
 
-El único cambio fue la actualización en sitio del código de la Lambda.
+El apply terminó con:
+
+```text
+Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+```
+
+Cambios:
+
+```text
++ aws_iam_role_policy.lambda_bedrock
+~ aws_lambda_function.api
+```
+
 No se creó una nueva Lambda ni infraestructura persistente adicional.
 
-## Pruebas realizadas
+## Prueba E2E posterior
 
-### Health check
-
-``` text
-GET /health
-```
-
-Continúa funcionando correctamente después del despliegue.
-
-### Chat
-
-Prueba realizada:
-
-``` bash
+```bash
 curl -X POST \
   https://h9lsg64yy3.execute-api.eu-west-1.amazonaws.com/api/chat \
   -H "Content-Type: application/json" \
@@ -452,68 +521,72 @@ curl -X POST \
 
 Respuesta obtenida:
 
-``` json
+```json
 {
   "response": "[IA simulada][chat] Procesando: Analiza este documento",
   "environment": "dev"
 }
 ```
 
-Con esta prueba se ha validado el recorrido completo:
+Esto confirma que el entorno desplegado sigue utilizando `mock`. Tener código y permisos de Bedrock preparados no activa llamadas al modelo automáticamente.
 
-``` text
-API Gateway
-      |
-      v
-Lambda
-      |
-      v
-Mangum
-      |
-      v
-FastAPI
-      |
-      v
-Pydantic
-      |
-      v
-Respuesta HTTP
+## Control de costes
+
+Medidas actuales:
+
+- `AI_PROVIDER=mock` como valor por defecto;
+- Nova Micro como primer modelo;
+- `maxTokens=300`;
+- entrada limitada a 4000 caracteres;
+- IAM específico para `bedrock:InvokeModel`;
+- sin Provisioned Throughput;
+- tests mockeados sin consumo AWS;
+- revisión de `terraform plan` antes de cada `apply`.
+
+## Portabilidad
+
+El diseño evita acoplarse a una cuenta AWS concreta:
+
+- account ID obtenido dinámicamente;
+- región configurada mediante variables Terraform;
+- dependencias Python versionadas;
+- build reproducible para Python 3.12/Linux x86_64;
+- proveedor IA seleccionado mediante `AI_PROVIDER`.
+
+Como mejora posterior, conviene mover también la selección del modelo Bedrock completamente a Terraform y eliminar el fallback hardcodeado de Python.
+
+## Estado actual
+
+Completado:
+
+- FastAPI sobre Lambda mediante Mangum;
+- `/health` y `/api/chat`;
+- capa `services/`;
+- `chat_service.py`;
+- `ai_service.py`;
+- proveedor `mock`;
+- proveedor `bedrock`;
+- `clients/bedrock_client.py`;
+- Amazon Nova Micro preparado;
+- Bedrock Converse preparado;
+- `boto3` versionado;
+- tests Bedrock mockeados;
+- build actualizado con `clients/`;
+- IAM least privilege para Bedrock;
+- despliegue satisfactorio;
+- E2E validado todavía en `mock`;
+- límite local de entrada de 1 a 4000 caracteres;
+- límite de salida de 300 tokens.
+
+Pendiente antes de la primera llamada real a Bedrock:
+
+```text
+1. añadir tests para min_length y max_length;
+2. ejecutar el full suite;
+3. reconstruir la Lambda;
+4. revisar terraform plan;
+5. desplegar el límite de entrada;
+6. hacer una primera invocación real y controlada a Bedrock.
 ```
 
-## Estado del Capítulo 2
-
-Hasta este punto se ha completado:
-
--   creación de la aplicación FastAPI;
--   mantenimiento del contrato existente de `/health`;
--   integración FastAPI ↔ Lambda mediante Mangum;
--   alineación del entorno local con Python 3.12;
--   declaración de dependencias en `requirements.txt`;
--   build reproducible para Linux x86_64;
--   empaquetado del backend y sus dependencias;
--   despliegue mediante Terraform;
--   creación de `POST /api/chat`;
--   validación de entrada y salida mediante Pydantic;
--   nueva ruta correspondiente en API Gateway;
--   prueba real satisfactoria de `GET /health`;
--   prueba real satisfactoria de `POST /api/chat`.
--   separación de la lógica de chat en `services/chat_service.py`,
-    iniciando la capa de servicios/orquestación del backend;
--   creación de `services/ai_service.py` como capa común y reutilizable
-    de acceso a IA;
--   incorporación de `use_case` para identificar el contexto que invoca
-    la capa de IA;
--   proveedor `mock` por defecto mediante `AI_PROVIDER`, sin llamadas
-    externas ni coste de IA;
--   separación de dependencias de desarrollo en `requirements-dev.txt`;
--   incorporación de `pytest`;
--   cinco tests locales validados correctamente para `ai_service` y
-    `chat_service`;
--   uso de `monkeypatch` para aislar variables de entorno entre tests;
--   actualización del build para copiar el directorio completo
-    `services/`.
-
-Todavía no se ha añadido Bedrock ni RAG. La capa de IA actual utiliza
-una implementación `mock`. El siguiente paso previsto es hacer
-`AI_PROVIDER` configurable explícitamente desde Terraform, manteniendo
-`mock` como valor seguro por defecto.
+RAG todavía no se ha incorporado. Se añadirá en una fase posterior.
