@@ -1,7 +1,5 @@
-
 # ============================================================
 # DOCUMENTS
-# 
 # ============================================================
 
 resource "aws_apigatewayv2_route" "documents_upload_url" {
@@ -46,10 +44,7 @@ resource "aws_apigatewayv2_route" "health" {
   api_id = aws_apigatewayv2_api.api.id
 
   route_key = "GET /health"
-
-  target = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-
-
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
 # ============================================================
@@ -78,7 +73,6 @@ resource "aws_apigatewayv2_stage" "default" {
 
   # Limita específicamente las llamadas al endpoint de chat.
   # Protege Lambda y el consumo de Bedrock.
-
   route_settings {
     route_key = aws_apigatewayv2_route.chat.route_key
 
@@ -88,12 +82,20 @@ resource "aws_apigatewayv2_stage" "default" {
 
   # Limita la generación de URLs de subida de documentos.
   # Reduce abuso accidental y llamadas innecesarias a Lambda.
-
   route_settings {
     route_key = aws_apigatewayv2_route.documents_upload_url.route_key
 
     throttling_rate_limit  = 1
     throttling_burst_limit = 2
+  }
+
+  # Limita las consultas de estado de refrigeración.
+  # Evita abuso y protege Lambda ante picos de peticiones.
+  route_settings {
+    route_key = aws_apigatewayv2_route.refrigeration_status.route_key
+
+    throttling_rate_limit  = 2
+    throttling_burst_limit = 5
   }
 }
 
@@ -111,7 +113,6 @@ resource "aws_apigatewayv2_route" "chat" {
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
-
 
 # ============================================================
 # JWT AUTHORIZER
@@ -132,4 +133,19 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
 
     issuer = "https://${aws_cognito_user_pool.users.endpoint}"
   }
+}
+
+# ============================================================
+# REFRIGERATION
+# GET /api/refrigeration/status -> Lambda
+# ============================================================
+
+resource "aws_apigatewayv2_route" "refrigeration_status" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  route_key = "GET /api/refrigeration/status"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }

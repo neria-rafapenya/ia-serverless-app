@@ -14,7 +14,7 @@ La infraestructura se gestiona mediante Terraform para que pueda recrearse de fo
 - **`iam.tf`** define el rol IAM de la Lambda, sus permisos básicos de CloudWatch y la policy específica de Bedrock con enfoque least privilege.
 - **`lambda.tf`** empaqueta el código Python del backend y crea la función AWS Lambda.
 - **`cloudwatch.tf`** gestiona el grupo de logs de la Lambda en CloudWatch y configura una retención de 7 días.
-- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health` y `POST /api/chat`, el permiso de invocación, el stage `$default`, el throttling y el JWT authorizer de Cognito.
+- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health`, `POST /api/chat`, `POST /api/documents/upload-url` y `GET /api/refrigeration/status`, el permiso de invocación, el stage `$default`, el throttling por ruta y el JWT authorizer de Cognito.
 - **`cognito.tf`** crea el Cognito User Pool y el App Client web utilizado para autenticar usuarios.
 - **`terraform.tfvars`** contiene valores concretos de variables para el entorno local. Este archivo no se versiona.
 - **`.terraform.lock.hcl`** fija las versiones de los providers utilizados por Terraform.
@@ -52,7 +52,7 @@ FastAPI
            |
            +--> mock      <- valor seguro por defecto
            |
-           +--> bedrock   <- activo actualmente en dev
+           +--> bedrock   <- preparado y validado; actualmente desactivado
                     |
                     v
               Nova Micro
@@ -91,7 +91,7 @@ Runtime: Python 3.12
 Memoria: 128 MB
 Timeout: 10 segundos
 ENVIRONMENT: dev
-AI_PROVIDER: bedrock
+AI_PROVIDER: mock
 BEDROCK_MODEL_ID: eu.amazon.nova-micro-v1:0
 ```
 
@@ -138,7 +138,7 @@ El backend obtiene después el valor mediante `AI_PROVIDER`.
 El valor por defecto en `variables.tf` sigue siendo `mock` como medida segura. En el entorno `dev`, `terraform.tfvars` sobrescribe explícitamente ese valor con:
 
 ```text
-ai_provider = "bedrock"
+ai_provider = "mock"
 ```
 
 por lo que `services/ai_service.py` utiliza Amazon Bedrock cuando `chat_service.py` determina que la petición requiere IA.
@@ -267,11 +267,13 @@ La retención limitada evita mantener logs indefinidamente y forma parte de la e
 
 Se ha creado una **API Gateway HTTP API** integrada mediante `AWS_PROXY` con la Lambda.
 
-Rutas:
+Rutas actuales:
 
 ```text
 GET  /health
 POST /api/chat
+POST /api/documents/upload-url
+GET  /api/refrigeration/status
 ```
 
 Stage:
@@ -307,6 +309,9 @@ Además, el presupuesto actual puede estar influido por costes históricos de re
 
 ## Estrategia de costes
 
+> **Estado actual de IA:** la integración con Amazon Bedrock ya fue validada correctamente desde local y desde la API protegida, pero `AI_PROVIDER` ha vuelto a `mock` mientras se desarrollan los servicios de dominio. Esto evita invocaciones accidentales y mantiene el control de costes.
+
+
 Una prioridad permanente del proyecto es evitar infraestructura que genere costes simplemente por estar encendida.
 
 Actualmente usamos principalmente:
@@ -319,7 +324,7 @@ IAM
 AWS Budgets
 ```
 
-Bedrock está activo en el entorno `dev` mediante:
+Bedrock está preparado y validado, pero actualmente el entorno `dev` vuelve a usar:
 
 ```text
 AI_PROVIDER = bedrock
@@ -533,6 +538,155 @@ Esto confirma que la configuración de credenciales, región, perfil de inferenc
 
 Esa primera llamada fue intencionadamente local y puntual. Posteriormente se añadieron throttling y autenticación JWT con Cognito y, una vez validados ambos controles, se activó Bedrock en la Lambda del entorno `dev`. La primera llamada real desde la API protegida también se validó correctamente con HTTP `200`.
 
+
+## Servicio de refrigeración
+
+Se ha incorporado un primer servicio de dominio para monitorización de dispositivos de refrigeración. La lógica está desacoplada de la fuente de datos para poder sustituir el mock actual por una API, IoT u otra integración externa sin modificar las reglas de negocio.
+
+### Flujo
+
+```text
+Cliente autenticado
+  |
+  v
+API Gateway
+  |
+  +--> JWT Cognito
+  +--> throttling 2 req/s, burst 5
+  |
+  v
+Lambda / FastAPI
+  |
+  v
+refrigeration_service.py
+  |
+  v
+refrigeration_source.py
+  |
+  +--> mock JSON (actual)
+  +--> API externa (futura)
+```
+
+### Endpoint
+
+```text
+GET /api/refrigeration/status
+```
+
+La ruta está protegida por el JWT authorizer de Cognito.
+
+Validación E2E realizada:
+
+```text
+GET /api/refrigeration/status sin JWT        -> 401 Unauthorized
+GET /api/refrigeration/status con JWT válido -> 200 OK
+```
+
+La respuesta validada contiene cuatro dispositivos de prueba:
+
+```text
+FRIDGE-001 -> NORMAL
+FRIDGE-002 -> WARNING
+FRIDGE-003 -> CRITICAL
+FRIDGE-004 -> OFFLINE
+```
+
+### Fuente configurable
+
+La integración se encuentra en:
+
+```text
+backend/integrations/refrigeration_source.py
+```
+
+La fuente se selecciona mediante:
+
+```text
+REFRIGERATION_SOURCE
+```
+
+El valor seguro por defecto es `mock`. Los datos de prueba se cargan desde:
+
+```text
+backend/mocks/refrigeration_data.json
+```
+
+La rama `api` queda preparada para una futura integración real y actualmente no está implementada.
+
+### Reglas deterministas
+
+La clasificación se ejecuta en:
+
+```text
+backend/services/refrigeration_service.py
+```
+
+Estados actuales:
+
+```text
+NORMAL
+WARNING
+CRITICAL
+OFFLINE
+```
+
+Los umbrales actuales son valores de demostración:
+
+```text
+warning  = 7.0 °C
+critical = 20.0 °C
+```
+
+No deben interpretarse como límites regulatorios ni como reglas definitivas de negocio. En una integración real deberán configurarse según cliente, producto, dispositivo o normativa aplicable.
+
+La clasificación es determinista y no requiere IA.
+
+### Throttling
+
+API Gateway aplica a `GET /api/refrigeration/status`:
+
+```text
+Rate limit:  2 peticiones/segundo
+Burst limit: 5 peticiones
+```
+
+El despliegue del throttling actualizó únicamente el stage existente:
+
+```text
+Plan: 0 to add, 1 to change, 0 to destroy.
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
+```
+
+No se creó nueva infraestructura persistente.
+
+### Build de Lambda
+
+`scripts/build_lambda.sh` copia ahora también:
+
+```text
+backend/integrations/
+backend/mocks/
+```
+
+además de `backend/services/` y `backend/clients/`.
+
+Este ajuste fue necesario para que la Lambda desplegada pudiera importar la integración de refrigeración y leer el JSON mock.
+
+### Tests
+
+La suite completa del backend queda actualmente en:
+
+```text
+28 passed, 1 warning
+```
+
+Se han añadido pruebas para `NORMAL`, `WARNING`, `CRITICAL` y `OFFLINE`, además de una prueba del endpoint HTTP.
+
+### Coste
+
+El servicio reutiliza la Lambda y API Gateway existentes. No se ha añadido una Lambda adicional ni infraestructura siempre encendida. La fuente actual es un mock local empaquetado con la Lambda.
+
+
 ## Estado actual
 
 ```text
@@ -581,12 +735,12 @@ Terraform
 
 ## Estado de la integración Bedrock
 
-La integración básica con Bedrock está activa en el entorno `dev`: código, cliente, modelo configurable, permisos IAM, tests y despliegue están validados.
+La integración básica con Bedrock está preparada y validada: código, cliente, modelo configurable, permisos IAM, tests y despliegue funcionan. Actualmente `dev` usa `AI_PROVIDER=mock` para evitar consumo accidental.
 
 El full suite del backend se ha validado con:
 
 ```text
-12 passed, 1 warning
+28 passed, 1 warning
 ```
 
 El límite de entrada es de 1 a 4000 caracteres y el cliente Bedrock limita la salida mediante:
@@ -667,7 +821,7 @@ El throttling reduce el riesgo de abuso y limita la velocidad a la que las petic
 - no establece un presupuesto mensual;
 - se complementa con autenticación JWT y límites de entrada/salida para reducir el riesgo de consumo no deseado.
 
-Estas pruebas de carga se realizaron antes de activar Bedrock, por lo que no generaron consumo de modelo. Actualmente `dev` utiliza `AI_PROVIDER=bedrock`.
+Estas pruebas de carga se realizaron antes de activar Bedrock, por lo que no generaron consumo de modelo. Actualmente `dev` utiliza `AI_PROVIDER=mock` para evitar consumo accidental.
 
 
 ## Amazon Cognito y JWT authorizer
@@ -700,10 +854,12 @@ audience -> App Client ID de Cognito
 identity -> Authorization header
 ```
 
-La ruta protegida es:
+Las rutas protegidas incluyen:
 
 ```text
 POST /api/chat
+POST /api/documents/upload-url
+GET  /api/refrigeration/status
 ```
 
 La ruta de salud continúa pública:
@@ -782,7 +938,7 @@ JWT Cognito              -> impide uso anónimo
 throttling API Gateway   -> limita velocidad de peticiones
 message max_length=4000  -> limita entrada
 maxTokens=300            -> limita salida futura del LLM
-AI_PROVIDER=bedrock      -> activo explícitamente en dev; default Terraform sigue en mock
+AI_PROVIDER=mock         -> estado actual seguro en dev; Bedrock queda preparado para activación controlada
 ```
 
 La activación se hizo de forma controlada: `terraform plan` mostró `0 to add, 1 to change, 0 to destroy`, se validó una petición autenticada real y se mantiene la regla de volver a `mock` cuando se detenga temporalmente el desarrollo.

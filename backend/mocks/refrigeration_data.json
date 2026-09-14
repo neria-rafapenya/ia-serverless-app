@@ -1,0 +1,30 @@
+[
+    {
+        "device_id": "FRIDGE-001",
+        "timestamp": "2026-09-14T19:30:00Z",
+        "temperature": 4.2,
+        "humidity": 58,
+        "status": "online"
+    },
+    {
+        "device_id": "FRIDGE-002",
+        "timestamp": "2026-09-14T19:31:00Z",
+        "temperature": 7.8,
+        "humidity": 62,
+        "status": "online"
+    },
+    {
+        "device_id": "FRIDGE-003",
+        "timestamp": "2026-09-14T19:32:00Z",
+        "temperature": 22.4,
+        "humidity": 65,
+        "status": "online"
+    },
+    {
+        "device_id": "FRIDGE-004",
+        "timestamp": "2026-09-14T19:33:00Z",
+        "temperature": 5.1,
+        "humidity": 59,
+        "status": "offline"
+    }
+]

@@ -26,5 +26,7 @@ cp "$BACKEND_DIR/app.py" "$BUILD_DIR/"
 cp "$BACKEND_DIR/lambda_function.py" "$BUILD_DIR/"
 cp -R "$BACKEND_DIR/services" "$BUILD_DIR/"
 cp -R "$BACKEND_DIR/clients" "$BUILD_DIR/"
+cp -R "$BACKEND_DIR/integrations" "$BUILD_DIR/"
+cp -R "$BACKEND_DIR/mocks" "$BUILD_DIR/"
 
 echo "Build de Lambda preparado en: $BUILD_DIR"

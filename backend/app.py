@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
-
+from services.refrigeration_service import get_refrigeration_status
 from services.chat_service import process_message
 from services.document_service import generate_upload_post
 
@@ -123,3 +123,10 @@ def chat(request: ChatRequest):
     response = process_message(request.message)
 
     return ChatResponse(response=response, environment=environment)
+
+
+@app.get("/api/refrigeration/status")
+def refrigeration_status():
+    return {
+        "devices": get_refrigeration_status(),
+    }

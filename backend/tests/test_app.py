@@ -166,3 +166,23 @@ def test_document_upload_url_rejects_invalid_request():
     )
 
     assert response.status_code == 422
+
+
+def test_refrigeration_status_endpoint():
+    response = client.get("/api/refrigeration/status")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert "devices" in data
+    assert len(data["devices"]) == 4
+
+    classifications = {
+        device["device_id"]: device["classification"] for device in data["devices"]
+    }
+
+    assert classifications["FRIDGE-001"] == "NORMAL"
+    assert classifications["FRIDGE-002"] == "WARNING"
+    assert classifications["FRIDGE-003"] == "CRITICAL"
+    assert classifications["FRIDGE-004"] == "OFFLINE"
