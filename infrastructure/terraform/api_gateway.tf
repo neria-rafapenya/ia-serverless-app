@@ -57,6 +57,15 @@ resource "aws_apigatewayv2_stage" "default" {
 
   name        = "$default"
   auto_deploy = true
+
+  # Limita específicamente las llamadas al endpoint de chat.
+  # Protege Lambda y, cuando lo activemos, el consumo de Bedrock.
+  route_settings {
+    route_key = aws_apigatewayv2_route.chat.route_key
+
+    throttling_rate_limit  = 2
+    throttling_burst_limit = 5
+  }
 }
 
 # ============================================================

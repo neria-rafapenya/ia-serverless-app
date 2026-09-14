@@ -659,3 +659,73 @@ y el backend está incorporando un máximo de:
 ```
 
 RAG y otros componentes de IA se incorporarán posteriormente y solo cuando aporten valor al caso de uso y su coste esté justificado.
+
+## Throttling de `POST /api/chat`
+
+API Gateway aplica un límite específico a la ruta de chat mediante `route_settings` en el stage `$default`:
+
+```hcl
+route_settings {
+  route_key = aws_apigatewayv2_route.chat.route_key
+
+  throttling_rate_limit  = 2
+  throttling_burst_limit = 5
+}
+```
+
+Esto limita aproximadamente el tráfico sostenido a 2 peticiones por segundo, con una ráfaga de hasta 5 peticiones.
+
+`GET /health` queda fuera de este límite específico.
+
+### Despliegue
+
+El cambio se aplicó sin crear ni destruir recursos:
+
+```text
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
+```
+
+El único recurso actualizado fue:
+
+```text
+aws_apigatewayv2_stage.default
+```
+
+### Prueba de integración
+
+Con `AI_PROVIDER=mock`, se lanzó una prueba contra la API pública con 100 peticiones y concurrencia 25.
+
+Resultado final:
+
+```text
+42 200
+58 429
+```
+
+La presencia de `429 Too Many Requests` confirma que el throttling está activo en API Gateway.
+
+Una ejecución anterior produjo:
+
+```text
+66 200
+18 429
+16 503
+```
+
+La segunda ejecución validó el comportamiento esperado de forma limpia mediante `429`.
+
+### Alcance del control
+
+El throttling reduce el riesgo de abuso y limita la velocidad a la que las peticiones pueden alcanzar Lambda y, en el futuro, Bedrock. Sin embargo:
+
+- es un mecanismo de limitación de tráfico, no de autenticación;
+- no establece un presupuesto mensual;
+- debe complementarse con autenticación/autorización y controles adicionales de coste antes de activar Bedrock en el endpoint público.
+
+Actualmente se mantiene:
+
+```text
+AI_PROVIDER=mock
+```
+
+por lo que estas pruebas no generaron consumo de Bedrock.

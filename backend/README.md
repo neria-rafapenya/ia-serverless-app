@@ -675,3 +675,43 @@ Pendiente antes de activar Bedrock en la Lambda pública:
 ```
 
 RAG todavía no se ha incorporado. Se añadirá en una fase posterior.
+
+## Protección del endpoint con throttling
+
+La ruta pública `POST /api/chat` está protegida mediante throttling en API Gateway antes de llegar a Lambda.
+
+Configuración desplegada:
+
+```text
+Rate limit: 2 peticiones/segundo
+Burst limit: 5 peticiones
+```
+
+El control se aplica en API Gateway, por lo que las peticiones rechazadas no continúan hacia Lambda ni, cuando se active, hacia Bedrock.
+
+`GET /health` no tiene este límite específico.
+
+### Validación de integración
+
+Se realizó una prueba real contra la API pública con `AI_PROVIDER=mock`, enviando 100 peticiones con concurrencia 25.
+
+Resultado de la validación final:
+
+```text
+42 200
+58 429
+```
+
+Esto confirma que API Gateway devuelve `HTTP 429 Too Many Requests` cuando el tráfico supera el límite efectivo.
+
+Una prueba anterior produjo:
+
+```text
+66 200
+18 429
+16 503
+```
+
+La segunda ejecución validó de forma limpia el comportamiento esperado del throttling mediante respuestas `429`.
+
+> El throttling de API Gateway es un control de tasa y ráfaga, no un mecanismo de autenticación ni un límite presupuestario rígido. Se mantiene `AI_PROVIDER=mock` mientras el endpoint público no tenga controles adicionales.
