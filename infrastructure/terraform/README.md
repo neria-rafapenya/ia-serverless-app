@@ -14,7 +14,8 @@ La infraestructura se gestiona mediante Terraform para que pueda recrearse de fo
 - **`iam.tf`** define el rol IAM de la Lambda, sus permisos básicos de CloudWatch y la policy específica de Bedrock con enfoque least privilege.
 - **`lambda.tf`** empaqueta el código Python del backend y crea la función AWS Lambda.
 - **`cloudwatch.tf`** gestiona el grupo de logs de la Lambda en CloudWatch y configura una retención de 7 días.
-- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health` y `POST /api/chat`, el permiso de invocación y el stage `$default`.
+- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health` y `POST /api/chat`, el permiso de invocación, el stage `$default`, el throttling y el JWT authorizer de Cognito.
+- **`cognito.tf`** crea el Cognito User Pool y el App Client web utilizado para autenticar usuarios.
 - **`terraform.tfvars`** contiene valores concretos de variables para el entorno local. Este archivo no se versiona.
 - **`.terraform.lock.hcl`** fija las versiones de los providers utilizados por Terraform.
 
@@ -26,9 +27,12 @@ Internet
    v
 API Gateway HTTP API
    |
-   +--> GET /health
+   +--> GET /health (público)
    |
    +--> POST /api/chat
+           |
+           +--> JWT authorizer -> Cognito User Pool
+           +--> throttling 2 req/s, burst 5
    |
    v
 AWS Lambda
@@ -364,13 +368,15 @@ La policy IAM de Bedrock no genera coste por sí sola.
 
 El consumo de Bedrock comenzará únicamente cuando se realicen invocaciones reales al modelo.
 
-Antes de activar Bedrock se están añadiendo controles explícitos:
+Antes de activar Bedrock se han añadido controles explícitos:
 
 ```text
 entrada máxima: 4000 caracteres
 salida máxima: 300 tokens
 AI_PROVIDER=mock por defecto
 IAM mínimo
+throttling en POST /api/chat
+autenticación JWT con Cognito
 tests sin llamadas AWS reales
 ```
 
@@ -573,7 +579,7 @@ Antes de cambiar la Lambda a:
 AI_PROVIDER=bedrock
 ```
 
-se añadirá una barrera de protección, como autenticación y/o throttling, y se revisará nuevamente el impacto económico.
+se han añadido throttling y autenticación JWT con Cognito. Sigue siendo obligatorio revisar nuevamente el impacto económico antes de activar el proveedor real.
 
 ## Estado actual
 
@@ -635,15 +641,13 @@ El límite de entrada de 1 a 4000 caracteres ya está desplegado y un mensaje va
 
 La primera invocación real a Bedrock ya se ha completado correctamente desde local.
 
-Antes de activar Bedrock en la Lambda pública quedan estos pasos:
+Antes de activar Bedrock en la Lambda quedan estos pasos:
 
 ```text
-1. mantener AI_PROVIDER=mock mientras el endpoint siga sin protección;
-2. añadir autenticación y/o throttling;
-3. revisar nuevamente el impacto económico;
-4. activar Bedrock de forma controlada;
-5. comprobar respuesta, logs y coste;
-6. volver a AI_PROVIDER=mock cuando se pare temporalmente el desarrollo.
+1. mantener AI_PROVIDER=mock hasta la revisión final de coste y seguridad;
+2. activar Bedrock de forma controlada sobre el endpoint ya autenticado y limitado;
+3. comprobar respuesta, logs y coste;
+4. volver a AI_PROVIDER=mock cuando se pare temporalmente el desarrollo.
 ```
 
 El cliente Bedrock ya limita la salida mediante:
@@ -729,3 +733,127 @@ AI_PROVIDER=mock
 ```
 
 por lo que estas pruebas no generaron consumo de Bedrock.
+
+
+## Amazon Cognito y JWT authorizer
+
+Se ha añadido `cognito.tf` con dos recursos:
+
+```text
+aws_cognito_user_pool.users
+aws_cognito_user_pool_client.web
+```
+
+Configuración principal:
+
+```text
+Login: email
+Auto-verificación: email
+MFA: desactivado
+App Client: sin client secret
+Auth flow: ALLOW_USER_PASSWORD_AUTH
+Refresh token: habilitado
+```
+
+No se han añadido SMS, MFA de pago, Cognito Plus ni infraestructura persistente adicional. Para el POC se mantiene una configuración mínima orientada a coste bajo.
+
+API Gateway utiliza un authorizer de tipo `JWT`:
+
+```text
+issuer   -> endpoint del Cognito User Pool
+audience -> App Client ID de Cognito
+identity -> Authorization header
+```
+
+La ruta protegida es:
+
+```text
+POST /api/chat
+```
+
+La ruta de salud continúa pública:
+
+```text
+GET /health
+```
+
+### Despliegue de Cognito
+
+El User Pool y el App Client se desplegaron con:
+
+```text
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+```
+
+Después se añadió el JWT authorizer y se modificó la ruta de chat:
+
+```text
+Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+```
+
+No se destruyó ningún recurso. La Lambda y su configuración de IA no cambiaron durante este módulo.
+
+### Validación E2E
+
+Se creó un usuario de prueba de forma controlada, se estableció una contraseña permanente y se confirmó el estado:
+
+```text
+UserStatus: CONFIRMED
+```
+
+Pruebas realizadas:
+
+```text
+GET  /health sin token        -> 200 OK
+POST /api/chat sin token      -> 401 Unauthorized
+POST /api/chat con JWT válido -> 200 OK
+```
+
+Respuesta autenticada confirmada:
+
+```json
+{
+  "response": "Mensaje recibido: Hola",
+  "environment": "dev"
+}
+```
+
+Esto confirma el flujo:
+
+```text
+Usuario
+  |
+  v
+Cognito -> JWT
+  |
+  v
+API Gateway
+  |
+  +--> valida JWT
+  +--> aplica throttling
+  |
+  v
+Lambda -> FastAPI
+```
+
+`AI_PROVIDER` continúa en:
+
+```text
+mock
+```
+
+Por tanto, estas pruebas de autenticación no realizaron invocaciones a Bedrock.
+
+## Estado de protección antes de Bedrock
+
+La ruta de chat dispone ahora de varias barreras complementarias:
+
+```text
+JWT Cognito              -> impide uso anónimo
+throttling API Gateway   -> limita velocidad de peticiones
+message max_length=4000  -> limita entrada
+maxTokens=300            -> limita salida futura del LLM
+AI_PROVIDER=mock         -> evita consumo Bedrock hasta activación explícita
+```
+
+El siguiente cambio de proveedor a Bedrock deberá hacerse de forma controlada, revisar `terraform plan` y coste, validar una petición autenticada real y volver a `mock` cuando se detenga temporalmente el desarrollo.

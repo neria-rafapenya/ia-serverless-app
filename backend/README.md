@@ -48,7 +48,7 @@ flujo determinista        ai_service.py
                                Amazon Nova Micro
 ```
 
-La integración con Bedrock ya está preparada en código e IAM, pero el entorno desplegado continúa utilizando `AI_PROVIDER=mock`.
+La integración con Bedrock ya está preparada en código e IAM, pero el entorno desplegado continúa utilizando `AI_PROVIDER=mock`. La ruta `POST /api/chat` está protegida por API Gateway mediante throttling y autenticación JWT con Amazon Cognito.
 
 ## Versiones actuales
 
@@ -607,7 +607,7 @@ AI_PROVIDER=mock
 
 Por tanto, el endpoint público `/api/chat` sigue sin realizar llamadas reales a Bedrock.
 
-Antes de activar `AI_PROVIDER=bedrock` en la API pública se añadirá una protección frente a consumo no deseado, por ejemplo autenticación y/o throttling. Esta precaución es especialmente importante porque el endpoint actual es público.
+Antes de activar `AI_PROVIDER=bedrock` se han añadido dos barreras frente a consumo no deseado: throttling y autenticación JWT con Amazon Cognito. `GET /health` continúa público, mientras que `POST /api/chat` exige un JWT válido.
 
 ## Control de costes
 
@@ -663,15 +663,13 @@ Completado:
 
 Primera llamada real a Bedrock: completada correctamente desde local.
 
-Pendiente antes de activar Bedrock en la Lambda pública:
+Pendiente antes de activar Bedrock en la Lambda:
 
 ```text
-1. mantener AI_PROVIDER=mock mientras el endpoint siga sin protección;
-2. añadir autenticación y/o throttling;
-3. revisar el impacto económico antes de activar el proveedor real;
-4. activar Bedrock solo de forma controlada;
-5. revisar logs y coste después de cada prueba real;
-6. volver a AI_PROVIDER=mock al parar temporalmente el desarrollo.
+1. mantener AI_PROVIDER=mock hasta completar la revisión final de seguridad y coste;
+2. activar Bedrock solo de forma controlada sobre el endpoint ya autenticado y limitado;
+3. validar respuesta, logs y consumo tras la prueba real;
+4. volver a AI_PROVIDER=mock al parar temporalmente el desarrollo.
 ```
 
 RAG todavía no se ha incorporado. Se añadirá en una fase posterior.
@@ -714,4 +712,48 @@ Una prueba anterior produjo:
 
 La segunda ejecución validó de forma limpia el comportamiento esperado del throttling mediante respuestas `429`.
 
-> El throttling de API Gateway es un control de tasa y ráfaga, no un mecanismo de autenticación ni un límite presupuestario rígido. Se mantiene `AI_PROVIDER=mock` mientras el endpoint público no tenga controles adicionales.
+> El throttling de API Gateway es un control de tasa y ráfaga, no un límite presupuestario rígido. La autenticación se resuelve ahora con un authorizer JWT de API Gateway conectado a Amazon Cognito. `AI_PROVIDER` continúa en `mock`.
+
+
+## Autenticación con Amazon Cognito
+
+La ruta `POST /api/chat` está protegida mediante un **JWT authorizer** de API Gateway conectado a un **Amazon Cognito User Pool**. La autenticación ocurre antes de invocar la Lambda, por lo que una petición sin token válido no alcanza FastAPI ni puede provocar una futura llamada a Bedrock.
+
+Comportamiento validado en AWS:
+
+```text
+GET  /health sin token       -> 200 OK
+POST /api/chat sin token     -> 401 Unauthorized
+POST /api/chat con JWT válido -> 200 OK
+```
+
+Prueba autenticada confirmada:
+
+```json
+{
+  "response": "Mensaje recibido: Hola",
+  "environment": "dev"
+}
+```
+
+El JWT se obtiene mediante Cognito y se envía como:
+
+```text
+Authorization: Bearer <JWT>
+```
+
+Actualmente la autenticación se valida en API Gateway; no ha sido necesario modificar el código FastAPI para bloquear las peticiones anónimas. Esto mantiene separadas las responsabilidades:
+
+```text
+Cognito        -> autentica al usuario
+API Gateway    -> valida el JWT y aplica throttling
+Lambda/FastAPI -> ejecuta la lógica de negocio
+```
+
+El entorno desplegado continúa con:
+
+```text
+AI_PROVIDER=mock
+```
+
+Por tanto, la validación de Cognito no generó consumo de Bedrock.

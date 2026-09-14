@@ -78,4 +78,29 @@ resource "aws_apigatewayv2_route" "chat" {
 
   route_key = "POST /api/chat"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+
+# ============================================================
+# JWT AUTHORIZER
+# Valida tokens emitidos por Cognito
+# ============================================================
+
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  name             = "${var.project_name}-${var.environment}-cognito"
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    audience = [
+      aws_cognito_user_pool_client.web.id
+    ]
+
+    issuer = "https://${aws_cognito_user_pool.users.endpoint}"
+  }
 }
