@@ -556,6 +556,59 @@ HTTP/2 422
 
 Posteriormente, tras externalizar `BEDROCK_MODEL_ID`, se volvió a probar `/api/chat` y continuó respondiendo en modo `mock` correctamente.
 
+
+## Primera invocación real a Amazon Bedrock
+
+Se ha realizado con éxito la primera llamada real y controlada a Amazon Bedrock desde el entorno local de desarrollo.
+
+La prueba se ejecutó desde `backend/` usando el perfil SSO del proyecto y la región `eu-west-1`:
+
+```bash
+AWS_PROFILE=ia-serverless-dev \
+AWS_DEFAULT_REGION=eu-west-1 \
+BEDROCK_MODEL_ID=eu.amazon.nova-micro-v1:0 \
+python -c '\
+from clients.bedrock_client import generate_text\
+print(generate_text("Responde únicamente con: Bedrock funciona", "test"))\
+'
+```
+
+Respuesta obtenida:
+
+```text
+Bedrock funciona.
+```
+
+Esta prueba confirma que funcionan conjuntamente:
+
+```text
+AWS SSO / STS
+   |
+   v
+boto3 bedrock-runtime
+   |
+   v
+Converse API
+   |
+   v
+eu.amazon.nova-micro-v1:0
+   |
+   v
+Amazon Nova Micro
+```
+
+La invocación fue deliberadamente local y puntual. No se cambió el proveedor efectivo de la Lambda desplegada.
+
+El entorno AWS continúa con:
+
+```text
+AI_PROVIDER=mock
+```
+
+Por tanto, el endpoint público `/api/chat` sigue sin realizar llamadas reales a Bedrock.
+
+Antes de activar `AI_PROVIDER=bedrock` en la API pública se añadirá una protección frente a consumo no deseado, por ejemplo autenticación y/o throttling. Esta precaución es especialmente importante porque el endpoint actual es público.
+
 ## Control de costes
 
 Medidas actuales:
@@ -601,20 +654,24 @@ Completado:
 - IAM least privilege para Bedrock;
 - despliegue satisfactorio;
 - E2E validado todavía en `mock`;
+- primera invocación real a Amazon Bedrock validada desde local;
 - límite de entrada de 1 a 4000 caracteres probado y desplegado;
 - respuesta HTTP 422 validada para mensaje vacío;
 - full suite validado con 12 tests;
 - `BEDROCK_MODEL_ID` externalizado a Terraform/Lambda;
 - límite de salida de 300 tokens.
 
-Pendiente antes de la primera llamada real a Bedrock:
+Primera llamada real a Bedrock: completada correctamente desde local.
+
+Pendiente antes de activar Bedrock en la Lambda pública:
 
 ```text
-1. revisar nuevamente el impacto económico;
-2. evitar activar Bedrock directamente sobre un endpoint público sin protección;
-3. realizar una primera invocación real de forma controlada;
-4. revisar respuesta, logs y coste;
-5. mantener AI_PROVIDER=mock como valor seguro cuando no se necesite Bedrock.
+1. mantener AI_PROVIDER=mock mientras el endpoint siga sin protección;
+2. añadir autenticación y/o throttling;
+3. revisar el impacto económico antes de activar el proveedor real;
+4. activar Bedrock solo de forma controlada;
+5. revisar logs y coste después de cada prueba real;
+6. volver a AI_PROVIDER=mock al parar temporalmente el desarrollo.
 ```
 
 RAG todavía no se ha incorporado. Se añadirá en una fase posterior.

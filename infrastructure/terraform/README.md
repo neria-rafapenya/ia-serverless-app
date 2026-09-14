@@ -534,6 +534,47 @@ mensaje vacío  -> 422
 
 Después de añadir `BEDROCK_MODEL_ID` a la Lambda, se repitió la petición con `"Analiza este documento"` y la respuesta continuó siendo la simulada, confirmando que el proveedor efectivo sigue siendo `mock`.
 
+
+## Primera invocación real controlada a Bedrock
+
+La integración se ha validado con una primera llamada real a Amazon Bedrock ejecutada desde local, sin cambiar la configuración efectiva de la Lambda pública.
+
+Se utilizó:
+
+```text
+AWS_PROFILE=ia-serverless-dev
+AWS_DEFAULT_REGION=eu-west-1
+BEDROCK_MODEL_ID=eu.amazon.nova-micro-v1:0
+```
+
+La llamada se realizó mediante `backend/clients/bedrock_client.py`, usando `boto3` y la API `Converse`.
+
+Respuesta obtenida:
+
+```text
+Bedrock funciona.
+```
+
+Esto confirma que la configuración de credenciales, región, perfil de inferencia y permisos necesarios para la invocación real son funcionales desde el entorno de desarrollo.
+
+La Lambda desplegada continúa con:
+
+```text
+AI_PROVIDER=mock
+```
+
+No se ha activado Bedrock en el endpoint público de API Gateway.
+
+La primera llamada real fue intencionadamente local y puntual para evitar que una URL pública sin protección pueda convertirse en una vía de consumo inesperado.
+
+Antes de cambiar la Lambda a:
+
+```text
+AI_PROVIDER=bedrock
+```
+
+se añadirá una barrera de protección, como autenticación y/o throttling, y se revisará nuevamente el impacto económico.
+
 ## Estado actual
 
 ```text
@@ -592,14 +633,17 @@ El full suite del backend se ha validado con:
 
 El límite de entrada de 1 a 4000 caracteres ya está desplegado y un mensaje vacío se ha validado con respuesta HTTP `422`.
 
-Antes de activar Bedrock real quedan estos pasos:
+La primera invocación real a Bedrock ya se ha completado correctamente desde local.
+
+Antes de activar Bedrock en la Lambda pública quedan estos pasos:
 
 ```text
-1. revisar nuevamente el impacto económico;
-2. no activar Bedrock directamente sobre el endpoint público sin protección;
-3. realizar una primera invocación real de forma controlada;
-4. comprobar respuesta, logs y coste;
-5. volver a mock cuando no sea necesario mantener Bedrock activo.
+1. mantener AI_PROVIDER=mock mientras el endpoint siga sin protección;
+2. añadir autenticación y/o throttling;
+3. revisar nuevamente el impacto económico;
+4. activar Bedrock de forma controlada;
+5. comprobar respuesta, logs y coste;
+6. volver a AI_PROVIDER=mock cuando se pare temporalmente el desarrollo.
 ```
 
 El cliente Bedrock ya limita la salida mediante:
