@@ -24,6 +24,8 @@ FastAPI
    +--> GET /health
    |
    +--> POST /api/chat
+   |
+   +--> POST /api/documents/upload-url
             |
             v
       chat_service.py
@@ -78,12 +80,14 @@ backend/
 ├── services/
 │   ├── __init__.py
 │   ├── ai_service.py
-│   └── chat_service.py
+│   ├── chat_service.py
+│   └── document_service.py
 └── tests/
     ├── __init__.py
     ├── test_ai_service.py
     ├── test_bedrock_client.py
     ├── test_chat_service.py
+    ├── test_document_service.py
     └── test_app.py
 ```
 
@@ -345,7 +349,7 @@ pytest -v
 Resultado confirmado:
 
 ```text
-12 passed, 1 warning in 0.27s
+23 passed, 1 warning
 ```
 
 El warning procede de una deprecación de `anyio.abc.BlockingPortal` utilizada por `starlette.testclient`; no bloquea el funcionamiento actual.
@@ -428,6 +432,7 @@ Rutas actuales:
 ```text
 GET  /health
 POST /api/chat
+POST /api/documents/upload-url
 ```
 
 Ambas utilizan la misma Lambda.
@@ -699,3 +704,136 @@ Lambda/FastAPI -> ejecuta la lógica de negocio
 ```
 
 Durante la validación inicial de Cognito el entorno todavía estaba en `mock`, por lo que esas pruebas de autenticación no generaron consumo de Bedrock. Posteriormente se activó `bedrock` y se validó una petición autenticada real con HTTP `200`.
+
+
+---
+
+## Ingesta documental: subida segura a S3
+
+Se ha completado la primera fase de la ingesta documental para RAG: generación de autorizaciones temporales para que el cliente suba documentos directamente a Amazon S3 sin transportar el archivo a través de API Gateway y Lambda.
+
+### Endpoint
+
+```text
+POST /api/documents/upload-url
+```
+
+La ruta está protegida mediante JWT de Amazon Cognito. API Gateway valida el token antes de invocar la Lambda.
+
+El backend extrae el `sub` del usuario autenticado y genera una clave S3 controlada por el servidor:
+
+```text
+uploads/<user_id>/<uuid>.<extension>
+```
+
+El nombre original enviado por el cliente no se utiliza como clave S3.
+
+### Formatos y validación
+
+Formatos iniciales:
+
+```text
+PDF -> application/pdf
+TXT -> text/plain
+```
+
+Los controles configurables incluyen:
+
+```text
+Tamaño máximo por archivo: 20 MB
+Máximo de páginas PDF: 100
+Máximo de archivos por lote: 10
+Máximo de chunks por documento: 500
+Extensiones permitidas: pdf, txt
+```
+
+En esta fase se aplican ya la validación de extensión, `Content-Type`, tamaño declarado y tamaño real de la subida. Los límites de páginas, lotes y chunks se aplicarán en el worker de ingesta antes de operaciones potencialmente más costosas como OCR, embeddings o indexación vectorial.
+
+El worker deberá volver a inspeccionar el contenido real del fichero; no se confiará únicamente en el `Content-Type` proporcionado por el cliente.
+
+### Presigned POST
+
+Se utiliza una presigned POST de S3 con una validez de:
+
+```text
+300 segundos
+```
+
+La política incluye:
+
+```text
+content-length-range
+```
+
+por lo que S3 puede rechazar directamente un cuerpo que supere el límite configurado, incluso si el cliente declara otro tamaño al backend.
+
+El cliente S3 se configura con la región de ejecución (`AWS_REGION`) y genera directamente un endpoint regional. Esto corrigió el `307 Temporary Redirect` observado en la primera prueba con el endpoint global.
+
+La validación E2E posterior obtuvo directamente:
+
+```text
+HTTP/1.1 204 No Content
+```
+
+sin utilizar `curl -L`.
+
+S3 confirmó además:
+
+```text
+x-amz-server-side-encryption: AES256
+```
+
+### IAM
+
+La Lambda API dispone únicamente de `s3:PutObject` sobre:
+
+```text
+<documents-bucket>/uploads/*
+```
+
+No dispone de permisos generales `s3:*`, ni de lectura, borrado o listado del bucket para esta funcionalidad.
+
+### Throttling
+
+El endpoint de generación de URLs de subida tiene throttling específico en API Gateway:
+
+```text
+Rate limit: 1 petición/segundo
+Burst limit: 2 peticiones
+```
+
+Este control reduce ráfagas y abuso accidental antes de llegar a Lambda. No constituye un límite presupuestario absoluto.
+
+### Tests
+
+La suite actual del backend valida también la lógica documental y el endpoint HTTP, incluyendo la generación de la presigned POST, límites de tamaño, extensiones, MIME, autenticación y configuración regional de S3.
+
+Resultado actual:
+
+```text
+23 passed, 1 warning
+```
+
+El warning procede de una deprecación de Starlette/AnyIO y no bloquea la ejecución.
+
+### Próximo bloque
+
+La siguiente fase prevista del pipeline RAG es:
+
+```text
+S3
+ ↓
+SQS
+ ↓
+Lambda worker de ingesta
+ ↓
+extracción / validación
+ ↓
+chunking
+ ↓
+embeddings
+ ↓
+índice vectorial
+```
+
+Antes de incorporar OpenSearch u otra infraestructura vectorial se revisará explícitamente su modalidad de coste.

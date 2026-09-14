@@ -89,3 +89,31 @@ resource "aws_iam_role_policy" "lambda_bedrock" {
     ]
   })
 }
+
+# ============================================================
+# S3 - subida controlada de documentos
+# ============================================================
+
+resource "aws_iam_role_policy" "lambda_s3_documents_upload" {
+  name = "${var.project_name}-${var.environment}-s3-documents-upload"
+  role = aws_iam_role.lambda_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "UploadDocuments"
+        Effect = "Allow"
+
+        Action = [
+          "s3:PutObject"
+        ]
+
+        Resource = [
+          "${aws_s3_bucket.documents.arn}/uploads/*"
+        ]
+      }
+    ]
+  })
+}

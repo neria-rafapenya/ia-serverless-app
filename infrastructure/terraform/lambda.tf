@@ -39,9 +39,15 @@ resource "aws_lambda_function" "api" {
   # Variables de entorno disponibles para el backend
   environment {
     variables = {
-      ENVIRONMENT      = var.environment
-      AI_PROVIDER      = var.ai_provider
-      BEDROCK_MODEL_ID = var.bedrock_model_id
+      ENVIRONMENT                = var.environment
+      AI_PROVIDER                = var.ai_provider
+      BEDROCK_MODEL_ID           = var.bedrock_model_id
+      DOCUMENTS_BUCKET           = aws_s3_bucket.documents.bucket
+      INGESTION_MAX_FILE_SIZE_MB = tostring(var.ingestion_max_file_size_mb)
+      INGESTION_ALLOWED_EXTENSIONS = join(
+        ",",
+        var.ingestion_allowed_extensions
+      )
     }
   }
 }

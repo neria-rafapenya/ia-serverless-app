@@ -33,3 +33,42 @@ variable "bedrock_model_id" {
   type        = string
   default     = "eu.amazon.nova-micro-v1:0"
 }
+
+# ============================================================
+# INGESTA DOCUMENTAL
+# Límites de seguridad y control de costes para el futuro RAG
+# ============================================================
+
+variable "ingestion_max_file_size_mb" {
+  description = "Tamaño máximo permitido por archivo, en MB"
+  type        = number
+  default     = 20
+}
+
+variable "ingestion_max_pdf_pages" {
+  description = "Número máximo de páginas permitido por documento PDF"
+  type        = number
+  default     = 100
+}
+
+variable "ingestion_max_files_per_batch" {
+  description = "Número máximo de archivos que un usuario puede enviar en un mismo lote"
+  type        = number
+  default     = 10
+}
+
+variable "ingestion_allowed_extensions" {
+  description = "Extensiones de archivo permitidas para la ingesta documental"
+  type        = list(string)
+
+  default = [
+    "pdf",
+    "txt"
+  ]
+}
+
+variable "ingestion_max_chunks_per_document" {
+  description = "Número máximo de chunks que podrá generar un único documento antes de abortar la generación de embeddings"
+  type        = number
+  default     = 500
+}
