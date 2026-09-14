@@ -80,6 +80,13 @@ resource "aws_apigatewayv2_stage" "default" {
     throttling_burst_limit = 5
   }
 
+  route_settings {
+    route_key = aws_apigatewayv2_route.tachograph_status.route_key
+
+    throttling_rate_limit  = 2
+    throttling_burst_limit = 5
+  }
+
   # Limita la generación de URLs de subida de documentos.
   # Reduce abuso accidental y llamadas innecesarias a Lambda.
   route_settings {
@@ -144,6 +151,16 @@ resource "aws_apigatewayv2_route" "refrigeration_status" {
   api_id = aws_apigatewayv2_api.api.id
 
   route_key = "GET /api/refrigeration/status"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+resource "aws_apigatewayv2_route" "tachograph_status" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  route_key = "GET /api/tachograph/status"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 
   authorization_type = "JWT"

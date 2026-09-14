@@ -14,7 +14,7 @@ La infraestructura se gestiona mediante Terraform para que pueda recrearse de fo
 - **`iam.tf`** define el rol IAM de la Lambda, sus permisos básicos de CloudWatch y la policy específica de Bedrock con enfoque least privilege.
 - **`lambda.tf`** empaqueta el código Python del backend y crea la función AWS Lambda.
 - **`cloudwatch.tf`** gestiona el grupo de logs de la Lambda en CloudWatch y configura una retención de 7 días.
-- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health`, `POST /api/chat`, `POST /api/documents/upload-url` y `GET /api/refrigeration/status`, el permiso de invocación, el stage `$default`, el throttling por ruta y el JWT authorizer de Cognito.
+- **`api_gateway.tf`** contiene la HTTP API, la integración API Gateway → Lambda, las rutas `GET /health`, `POST /api/chat`, `POST /api/documents/upload-url`, `GET /api/refrigeration/status` y `GET /api/tachograph/status`, el permiso de invocación, el stage `$default`, el throttling por ruta y el JWT authorizer de Cognito.
 - **`cognito.tf`** crea el Cognito User Pool y el App Client web utilizado para autenticar usuarios.
 - **`terraform.tfvars`** contiene valores concretos de variables para el entorno local. Este archivo no se versiona.
 - **`.terraform.lock.hcl`** fija las versiones de los providers utilizados por Terraform.
@@ -274,6 +274,7 @@ GET  /health
 POST /api/chat
 POST /api/documents/upload-url
 GET  /api/refrigeration/status
+GET  /api/tachograph/status
 ```
 
 Stage:
@@ -288,7 +289,7 @@ con:
 auto_deploy = true
 ```
 
-La ruta `POST /api/chat` ha sido validada de extremo a extremo con autenticación JWT y Bedrock activo. Una petición sin JWT devuelve `401 Unauthorized`; una petición con JWT válido y un mensaje que requiere IA llega a Amazon Bedrock y devuelve HTTP `200`.
+La ruta `POST /api/chat` fue validada de extremo a extremo con autenticación JWT y, durante una prueba controlada anterior, con Bedrock activo. Actualmente `AI_PROVIDER=mock`. Las rutas de refrigeración y tacógrafos también están protegidas por JWT y se han validado con `401 Unauthorized` sin token y `200 OK` con JWT válido.
 
 ## AWS Budgets
 
@@ -327,7 +328,7 @@ AWS Budgets
 Bedrock está preparado y validado, pero actualmente el entorno `dev` vuelve a usar:
 
 ```text
-AI_PROVIDER = bedrock
+AI_PROVIDER = mock
 ```
 
 El valor por defecto de Terraform continúa siendo `mock`, de modo que otros entornos no activan Bedrock salvo que se configure explícitamente.
@@ -435,40 +436,59 @@ terraform apply
 
 ## Último cambio validado
 
-Para activar Bedrock en el entorno `dev`, el plan produjo:
+El último módulo incorporado es el servicio de tacógrafos.
+
+La creación de la nueva ruta protegida y la actualización del throttling produjeron:
 
 ```text
-Plan: 0 to add, 1 to change, 0 to destroy.
+Plan: 1 to add, 1 to change, 0 to destroy.
 ```
 
-El único cambio fue una actualización **in-place** de:
+Los cambios fueron:
 
 ```text
-~ aws_lambda_function.api
-```
-
-Terraform detectó exclusivamente:
-
-```text
-AI_PROVIDER = mock -> bedrock
++ aws_apigatewayv2_route.tachograph_status
+~ aws_apigatewayv2_stage.default
 ```
 
 El apply terminó con:
 
 ```text
+Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+```
+
+Después se reconstruyó el paquete Lambda con `scripts/build_lambda.sh`. Terraform detectó únicamente el cambio de código de la función:
+
+```text
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+El recurso actualizado fue:
+
+```text
+~ aws_lambda_function.api
+```
+
+y el apply terminó con:
+
+```text
 Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
 ```
 
-No se creó ni destruyó ningún recurso.
+No se destruyó ningún recurso ni se añadió infraestructura siempre encendida.
 
 ## Validación posterior al despliegue
 
 Se validaron primero los controles de acceso:
 
 ```text
-GET  /health sin JWT       -> 200
-POST /api/chat sin JWT     -> 401 Unauthorized
-POST /api/chat con JWT     -> 200
+GET  /health sin JWT                       -> 200
+POST /api/chat sin JWT                     -> 401 Unauthorized
+POST /api/chat con JWT                     -> 200
+GET  /api/refrigeration/status sin JWT     -> 401 Unauthorized
+GET  /api/refrigeration/status con JWT     -> 200
+GET  /api/tachograph/status sin JWT        -> 401 Unauthorized
+GET  /api/tachograph/status con JWT válido -> 200
 ```
 
 Después de activar `AI_PROVIDER=bedrock`, se ejecutó una petición autenticada a:
@@ -677,7 +697,7 @@ Este ajuste fue necesario para que la Lambda desplegada pudiera importar la inte
 La suite completa del backend queda actualmente en:
 
 ```text
-28 passed, 1 warning
+33 passed, 1 warning
 ```
 
 Se han añadido pruebas para `NORMAL`, `WARNING`, `CRITICAL` y `OFFLINE`, además de una prueba del endpoint HTTP.
@@ -685,6 +705,178 @@ Se han añadido pruebas para `NORMAL`, `WARNING`, `CRITICAL` y `OFFLINE`, ademá
 ### Coste
 
 El servicio reutiliza la Lambda y API Gateway existentes. No se ha añadido una Lambda adicional ni infraestructura siempre encendida. La fuente actual es un mock local empaquetado con la Lambda.
+
+
+
+## Servicio de tacógrafos
+
+Se ha incorporado un segundo servicio de dominio para monitorización de tacógrafos. Mantiene el mismo patrón desacoplado utilizado en refrigeración:
+
+```text
+fuente externa / mock
+        |
+        v
+tachograph_source.py
+        |
+        v
+tachograph_service.py
+        |
+        v
+reglas deterministas
+        |
+        v
+endpoint protegido
+```
+
+### Endpoint
+
+```text
+GET /api/tachograph/status
+```
+
+La ruta está protegida por el JWT authorizer de Cognito y reutiliza la misma Lambda y la misma HTTP API existentes.
+
+Validación E2E realizada:
+
+```text
+GET /api/tachograph/status sin JWT        -> 401 Unauthorized
+GET /api/tachograph/status con JWT válido -> 200 OK
+```
+
+La respuesta validada contiene cuatro conductores/vehículos de prueba:
+
+```text
+DRIVER-001 -> NORMAL
+DRIVER-002 -> WARNING
+DRIVER-003 -> CRITICAL
+DRIVER-004 -> OFFLINE
+```
+
+### Fuente configurable
+
+La integración se encuentra en:
+
+```text
+backend/integrations/tachograph_source.py
+```
+
+La fuente se selecciona mediante:
+
+```text
+TACHOGRAPH_SOURCE
+```
+
+El valor seguro por defecto es:
+
+```text
+mock
+```
+
+Los datos de prueba se cargan desde:
+
+```text
+backend/mocks/tachograph_data.json
+```
+
+La rama `api` está preparada para una futura integración real y actualmente lanza `NotImplementedError`.
+
+### Reglas deterministas
+
+La clasificación se ejecuta en:
+
+```text
+backend/services/tachograph_service.py
+```
+
+Estados actuales:
+
+```text
+NORMAL
+WARNING
+CRITICAL
+OFFLINE
+```
+
+Los umbrales actuales son de demostración:
+
+```text
+warning  = 480 minutos
+critical = 540 minutos
+```
+
+Estos valores no deben interpretarse como una implementación completa de la normativa de tacógrafos. Son umbrales de demo para validar arquitectura, flujo y observabilidad. Si más adelante se implementa cumplimiento normativo real, deberán modelarse reglas adicionales y verificarse contra fuentes oficiales vigentes.
+
+La clasificación actual es determinista y no requiere Bedrock.
+
+### Throttling
+
+API Gateway aplica a:
+
+```text
+GET /api/tachograph/status
+```
+
+los límites:
+
+```text
+Rate limit:  2 peticiones/segundo
+Burst limit: 5 peticiones
+```
+
+La incorporación de la ruta produjo:
+
+```text
+Plan: 1 to add, 1 to change, 0 to destroy.
+Apply complete! Resources: 1 added, 1 changed, 0 destroyed.
+```
+
+El recurso creado fue la ruta de API Gateway y el stage `$default` se actualizó in-place para añadir sus `route_settings`.
+
+### Despliegue de Lambda
+
+Tras reconstruir el paquete:
+
+```bash
+./scripts/build_lambda.sh
+```
+
+Terraform detectó únicamente el cambio del ZIP:
+
+```text
+Plan: 0 to add, 1 to change, 0 to destroy.
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
+```
+
+El único recurso actualizado fue:
+
+```text
+aws_lambda_function.api
+```
+
+El script de build ya copia carpetas completas:
+
+```text
+backend/services/
+backend/clients/
+backend/integrations/
+backend/mocks/
+```
+
+por lo que los nuevos archivos de tacógrafos quedan incluidos sin añadir reglas específicas al script.
+
+### Tests
+
+Se añadieron cuatro tests unitarios para el servicio y una prueba HTTP del nuevo endpoint.
+
+La suite completa del backend queda actualmente en:
+
+```text
+33 passed, 1 warning
+```
+
+### Coste
+
+El módulo reutiliza API Gateway, Cognito y la Lambda existentes. No se ha añadido una Lambda adicional ni infraestructura siempre encendida. La fuente actual es un JSON mock empaquetado con la Lambda, por lo que este módulo no introduce un coste fijo nuevo de infraestructura.
 
 
 ## Estado actual
@@ -704,7 +896,7 @@ Terraform
     +-- Lambda Python 3.12
     |       |
     |       +-- ENVIRONMENT
-    |       +-- AI_PROVIDER=bedrock
+    |       +-- AI_PROVIDER=mock
     |       +-- BEDROCK_MODEL_ID=eu.amazon.nova-micro-v1:0
     |       +-- boto3
     |       +-- Bedrock client preparado
@@ -740,7 +932,7 @@ La integración básica con Bedrock está preparada y validada: código, cliente
 El full suite del backend se ha validado con:
 
 ```text
-28 passed, 1 warning
+33 passed, 1 warning
 ```
 
 El límite de entrada es de 1 a 4000 caracteres y el cliente Bedrock limita la salida mediante:
@@ -752,7 +944,7 @@ maxTokens = 300
 La primera invocación real se validó primero desde local y después desde la API protegida con Cognito y throttling. El entorno `dev` utiliza actualmente:
 
 ```text
-AI_PROVIDER=bedrock
+AI_PROVIDER=mock
 ```
 
 El valor por defecto en Terraform sigue siendo `mock`. Cuando se detenga temporalmente el desarrollo se debe volver a `mock` para evitar consumo accidental.
@@ -860,6 +1052,7 @@ Las rutas protegidas incluyen:
 POST /api/chat
 POST /api/documents/upload-url
 GET  /api/refrigeration/status
+GET  /api/tachograph/status
 ```
 
 La ruta de salud continúa pública:
@@ -929,7 +1122,7 @@ Lambda -> FastAPI
 
 Las primeras pruebas de autenticación se realizaron todavía con `AI_PROVIDER=mock`, por lo que no invocaron Bedrock. Después se activó `AI_PROVIDER=bedrock` y se validó una petición autenticada real con HTTP `200`.
 
-## Estado de protección con Bedrock activo
+## Estado de protección de la ruta de IA
 
 La ruta de chat dispone ahora de varias barreras complementarias:
 
@@ -941,4 +1134,4 @@ maxTokens=300            -> limita salida futura del LLM
 AI_PROVIDER=mock         -> estado actual seguro en dev; Bedrock queda preparado para activación controlada
 ```
 
-La activación se hizo de forma controlada: `terraform plan` mostró `0 to add, 1 to change, 0 to destroy`, se validó una petición autenticada real y se mantiene la regla de volver a `mock` cuando se detenga temporalmente el desarrollo.
+La activación de Bedrock se validó de forma controlada en una fase anterior. Actualmente `AI_PROVIDER=mock`, por lo que el backend conserva la integración preparada sin realizar invocaciones accidentales al modelo.

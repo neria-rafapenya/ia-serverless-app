@@ -1,0 +1,34 @@
+[
+    {
+        "driver_id": "DRIVER-001",
+        "vehicle_id": "TRUCK-001",
+        "timestamp": "2026-09-14T20:30:00Z",
+        "driving_minutes_today": 240,
+        "break_minutes": 45,
+        "status": "online"
+    },
+    {
+        "driver_id": "DRIVER-002",
+        "vehicle_id": "TRUCK-002",
+        "timestamp": "2026-09-14T20:31:00Z",
+        "driving_minutes_today": 510,
+        "break_minutes": 45,
+        "status": "online"
+    },
+    {
+        "driver_id": "DRIVER-003",
+        "vehicle_id": "TRUCK-003",
+        "timestamp": "2026-09-14T20:32:00Z",
+        "driving_minutes_today": 570,
+        "break_minutes": 20,
+        "status": "online"
+    },
+    {
+        "driver_id": "DRIVER-004",
+        "vehicle_id": "TRUCK-004",
+        "timestamp": "2026-09-14T20:33:00Z",
+        "driving_minutes_today": 180,
+        "break_minutes": 45,
+        "status": "offline"
+    }
+]

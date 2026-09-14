@@ -186,3 +186,18 @@ def test_refrigeration_status_endpoint():
     assert classifications["FRIDGE-002"] == "WARNING"
     assert classifications["FRIDGE-003"] == "CRITICAL"
     assert classifications["FRIDGE-004"] == "OFFLINE"
+
+
+def test_tachograph_status():
+    response = client.get("/api/tachograph/status")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data["drivers"]) == 4
+
+    assert data["drivers"][0]["classification"] == "NORMAL"
+    assert data["drivers"][1]["classification"] == "WARNING"
+    assert data["drivers"][2]["classification"] == "CRITICAL"
+    assert data["drivers"][3]["classification"] == "OFFLINE"
