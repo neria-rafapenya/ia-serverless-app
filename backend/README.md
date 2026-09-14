@@ -48,7 +48,7 @@ flujo determinista        ai_service.py
                                Amazon Nova Micro
 ```
 
-La integración con Bedrock ya está preparada en código e IAM, pero el entorno desplegado continúa utilizando `AI_PROVIDER=mock`. La ruta `POST /api/chat` está protegida por API Gateway mediante throttling y autenticación JWT con Amazon Cognito.
+La integración con Bedrock está activa en el entorno desplegado mediante `AI_PROVIDER=bedrock`. La ruta `POST /api/chat` está protegida por API Gateway mediante throttling y autenticación JWT con Amazon Cognito, por lo que las invocaciones reales al modelo solo se permiten tras validar un token JWT válido.
 
 ## Versiones actuales
 
@@ -120,14 +120,7 @@ Entrada:
 }
 ```
 
-Mientras `AI_PROVIDER=mock`, la respuesta es:
-
-```json
-{
-  "response": "[IA simulada][chat] Procesando: Analiza este documento",
-  "environment": "dev"
-}
-```
+Con `AI_PROVIDER=bedrock`, los mensajes que `chat_service.py` clasifica como consultas de IA se envían a Amazon Bedrock. Por ejemplo, una petición autenticada con `"Explica en una frase qué es AWS Lambda"` fue validada de extremo a extremo y devolvió HTTP `200` con una respuesta generada por Nova Micro.
 
 La ruta delega en `services/chat_service.py`, que decide si la petición requiere IA.
 
@@ -245,7 +238,7 @@ Entrada API  -> máximo 4000 caracteres
 Salida LLM   -> máximo 300 tokens
 ```
 
-Además, `AI_PROVIDER=mock` continúa siendo el valor seguro por defecto.
+Además, `AI_PROVIDER=mock` continúa siendo el valor seguro por defecto en `variables.tf`, aunque el entorno `dev` se ha activado explícitamente con `ai_provider = "bedrock"` en `terraform.tfvars`.
 
 No se utiliza Provisioned Throughput ni capacidad reservada de Bedrock.
 
@@ -263,13 +256,13 @@ Ya está preparado:
 - perfil de inferencia europeo;
 - despliegue del código y permisos.
 
-El entorno desplegado continúa con:
+El entorno desplegado se ha activado explícitamente con:
 
 ```text
-AI_PROVIDER = mock
+AI_PROVIDER = bedrock
 ```
 
-Por tanto, todavía no consta una invocación real satisfactoria a Bedrock desde la aplicación.
+La integración ya ha sido validada desde la aplicación desplegada mediante una petición autenticada a `POST /api/chat`, con respuesta HTTP `200` generada por Amazon Nova Micro.
 
 ## `lambda_function.py`
 
@@ -492,23 +485,22 @@ Antes de cada `apply` hay que revisar siempre los recursos que se crean, modific
 
 ## Último despliegue validado
 
-Después de externalizar `BEDROCK_MODEL_ID`, el plan mostró:
+Para activar Bedrock en el entorno `dev`, Terraform mostró:
 
 ```text
 Plan: 0 to add, 1 to change, 0 to destroy.
 ```
 
-El cambio fue únicamente una actualización **in-place** de la Lambda:
+El único cambio fue una actualización **in-place** de la Lambda:
 
 ```text
 ~ aws_lambda_function.api
 ```
 
-Motivos:
+con el cambio de variable de entorno:
 
 ```text
-- nuevo source_code_hash tras reconstruir el ZIP;
-- nueva variable de entorno BEDROCK_MODEL_ID.
+AI_PROVIDER = mock -> bedrock
 ```
 
 El apply terminó con:
@@ -517,45 +509,7 @@ El apply terminó con:
 Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
 ```
 
-No se creó ni destruyó ningún recurso.
-
-## Prueba E2E posterior
-
-```bash
-curl -X POST \
-  https://h9lsg64yy3.execute-api.eu-west-1.amazonaws.com/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Analiza este documento"}'
-```
-
-Respuesta obtenida:
-
-```json
-{
-  "response": "[IA simulada][chat] Procesando: Analiza este documento",
-  "environment": "dev"
-}
-```
-
-Esto confirma que el entorno desplegado sigue utilizando `mock`. Tener código y permisos de Bedrock preparados no activa llamadas al modelo automáticamente.
-
-También se validó el control de entrada desplegado:
-
-```bash
-curl -i -X POST \
-  https://h9lsg64yy3.execute-api.eu-west-1.amazonaws.com/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":""}'
-```
-
-Resultado confirmado:
-
-```text
-HTTP/2 422
-```
-
-Posteriormente, tras externalizar `BEDROCK_MODEL_ID`, se volvió a probar `/api/chat` y continuó respondiendo en modo `mock` correctamente.
-
+No se creó ni destruyó ningún recurso. Después del despliegue se ejecutó una petición autenticada a `POST /api/chat` con el mensaje `Explica en una frase qué es AWS Lambda`. API Gateway validó el JWT de Cognito y la aplicación devolvió HTTP `200` con una respuesta real de Amazon Nova Micro.
 
 ## Primera invocación real a Amazon Bedrock
 
@@ -597,23 +551,14 @@ eu.amazon.nova-micro-v1:0
 Amazon Nova Micro
 ```
 
-La invocación fue deliberadamente local y puntual. No se cambió el proveedor efectivo de la Lambda desplegada.
-
-El entorno AWS continúa con:
-
-```text
-AI_PROVIDER=mock
-```
-
-Por tanto, el endpoint público `/api/chat` sigue sin realizar llamadas reales a Bedrock.
-
-Antes de activar `AI_PROVIDER=bedrock` se han añadido dos barreras frente a consumo no deseado: throttling y autenticación JWT con Amazon Cognito. `GET /health` continúa público, mientras que `POST /api/chat` exige un JWT válido.
+La primera invocación fue deliberadamente local y puntual. Después se añadieron dos barreras frente a consumo no deseado: throttling y autenticación JWT con Amazon Cognito. Una vez validadas, se activó `AI_PROVIDER=bedrock` en la Lambda de `dev` y se completó también una llamada real E2E desde `POST /api/chat`. `GET /health` continúa público, mientras que `POST /api/chat` exige un JWT válido.
 
 ## Control de costes
 
 Medidas actuales:
 
-- `AI_PROVIDER=mock` como valor por defecto;
+- `AI_PROVIDER=mock` como valor seguro por defecto en Terraform;
+- activación explícita de `bedrock` solo en el entorno `dev`;
 - Nova Micro como primer modelo;
 - `maxTokens=300`;
 - entrada limitada a 4000 caracteres;
@@ -653,24 +598,27 @@ Completado:
 - build actualizado con `clients/`;
 - IAM least privilege para Bedrock;
 - despliegue satisfactorio;
-- E2E validado todavía en `mock`;
-- primera invocación real a Amazon Bedrock validada desde local;
+- E2E autenticado validado con `AI_PROVIDER=bedrock`;
+- primera invocación real a Amazon Bedrock validada desde local y desde la API protegida;
 - límite de entrada de 1 a 4000 caracteres probado y desplegado;
 - respuesta HTTP 422 validada para mensaje vacío;
 - full suite validado con 12 tests;
 - `BEDROCK_MODEL_ID` externalizado a Terraform/Lambda;
 - límite de salida de 300 tokens.
 
-Primera llamada real a Bedrock: completada correctamente desde local.
+Primera llamada real a Bedrock: completada correctamente desde local y desde la API protegida.
 
-Pendiente antes de activar Bedrock en la Lambda:
+Estado operativo actual:
 
 ```text
-1. mantener AI_PROVIDER=mock hasta completar la revisión final de seguridad y coste;
-2. activar Bedrock solo de forma controlada sobre el endpoint ya autenticado y limitado;
-3. validar respuesta, logs y consumo tras la prueba real;
-4. volver a AI_PROVIDER=mock al parar temporalmente el desarrollo.
+AI_PROVIDER=bedrock en dev
+JWT Cognito obligatorio en POST /api/chat
+throttling 2 req/s, burst 5
+entrada máxima 4000 caracteres
+salida máxima 300 tokens
 ```
+
+Cuando se detenga temporalmente el desarrollo, `AI_PROVIDER` debe volver a `mock` para evitar consumo accidental.
 
 RAG todavía no se ha incorporado. Se añadirá en una fase posterior.
 
@@ -685,7 +633,7 @@ Rate limit: 2 peticiones/segundo
 Burst limit: 5 peticiones
 ```
 
-El control se aplica en API Gateway, por lo que las peticiones rechazadas no continúan hacia Lambda ni, cuando se active, hacia Bedrock.
+El control se aplica en API Gateway, por lo que las peticiones rechazadas no continúan hacia Lambda ni hacia Lambda/Bedrock.
 
 `GET /health` no tiene este límite específico.
 
@@ -712,7 +660,7 @@ Una prueba anterior produjo:
 
 La segunda ejecución validó de forma limpia el comportamiento esperado del throttling mediante respuestas `429`.
 
-> El throttling de API Gateway es un control de tasa y ráfaga, no un límite presupuestario rígido. La autenticación se resuelve ahora con un authorizer JWT de API Gateway conectado a Amazon Cognito. `AI_PROVIDER` continúa en `mock`.
+> El throttling de API Gateway es un control de tasa y ráfaga, no un límite presupuestario rígido. La autenticación se resuelve ahora con un authorizer JWT de API Gateway conectado a Amazon Cognito. `AI_PROVIDER` está actualmente en `bedrock` en el entorno `dev`.
 
 
 ## Autenticación con Amazon Cognito
@@ -750,10 +698,4 @@ API Gateway    -> valida el JWT y aplica throttling
 Lambda/FastAPI -> ejecuta la lógica de negocio
 ```
 
-El entorno desplegado continúa con:
-
-```text
-AI_PROVIDER=mock
-```
-
-Por tanto, la validación de Cognito no generó consumo de Bedrock.
+Durante la validación inicial de Cognito el entorno todavía estaba en `mock`, por lo que esas pruebas de autenticación no generaron consumo de Bedrock. Posteriormente se activó `bedrock` y se validó una petición autenticada real con HTTP `200`.
