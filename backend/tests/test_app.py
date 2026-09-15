@@ -201,3 +201,27 @@ def test_tachograph_status():
     assert data["drivers"][1]["classification"] == "WARNING"
     assert data["drivers"][2]["classification"] == "CRITICAL"
     assert data["drivers"][3]["classification"] == "OFFLINE"
+
+
+def test_refrigeration_analysis(monkeypatch):
+    monkeypatch.setattr(
+        "app.generate_refrigeration_analysis",
+        lambda: "Análisis de refrigeración generado",
+    )
+
+    response = client.get("/api/refrigeration/analysis")
+
+    assert response.status_code == 200
+    assert response.json() == {"analysis": "Análisis de refrigeración generado"}
+
+
+def test_tachograph_analysis(monkeypatch):
+    monkeypatch.setattr(
+        "app.generate_tachograph_analysis",
+        lambda: "Análisis de tacógrafo generado",
+    )
+
+    response = client.get("/api/tachograph/analysis")
+
+    assert response.status_code == 200
+    assert response.json() == {"analysis": "Análisis de tacógrafo generado"}

@@ -12,6 +12,7 @@ resource "aws_apigatewayv2_route" "documents_upload_url" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+
 # ============================================================
 # API GATEWAY
 # HTTP API de entrada al backend serverless
@@ -21,6 +22,7 @@ resource "aws_apigatewayv2_api" "api" {
   name          = "${var.project_name}-${var.environment}-api"
   protocol_type = "HTTP"
 }
+
 
 # ============================================================
 # Integración API Gateway -> Lambda
@@ -35,6 +37,7 @@ resource "aws_apigatewayv2_integration" "lambda" {
   payload_format_version = "2.0"
 }
 
+
 # ============================================================
 # Ruta HTTP pública
 # GET /health -> Lambda
@@ -46,6 +49,7 @@ resource "aws_apigatewayv2_route" "health" {
   route_key = "GET /health"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
+
 
 # ============================================================
 # Permiso para que API Gateway pueda invocar la Lambda
@@ -60,6 +64,7 @@ resource "aws_lambda_permission" "api_gateway" {
   source_arn = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
+
 # ============================================================
 # Stage por defecto
 # Publica automáticamente los cambios de la HTTP API
@@ -71,14 +76,64 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 
-  # Limita específicamente las llamadas al endpoint de chat.
-  # Protege Lambda y el consumo de Bedrock.
+  # ----------------------------------------------------------
+  # CHAT
+  #
+  # Protege Lambda y limita el consumo accidental de Bedrock.
+  # ----------------------------------------------------------
+
   route_settings {
     route_key = aws_apigatewayv2_route.chat.route_key
 
     throttling_rate_limit  = 2
     throttling_burst_limit = 5
   }
+
+  # ----------------------------------------------------------
+  # DOCUMENTS
+  #
+  # Limita la generación de URLs de subida de documentos.
+  # ----------------------------------------------------------
+
+  route_settings {
+    route_key = aws_apigatewayv2_route.documents_upload_url.route_key
+
+    throttling_rate_limit  = 1
+    throttling_burst_limit = 2
+  }
+
+  # ----------------------------------------------------------
+  # REFRIGERATION STATUS
+  #
+  # Consulta determinista. No utiliza Bedrock.
+  # ----------------------------------------------------------
+
+  route_settings {
+    route_key = aws_apigatewayv2_route.refrigeration_status.route_key
+
+    throttling_rate_limit  = 2
+    throttling_burst_limit = 5
+  }
+
+  # ----------------------------------------------------------
+  # REFRIGERATION ANALYSIS
+  #
+  # Esta ruta puede realizar una llamada a Bedrock.
+  # Aplicamos un límite más restrictivo para controlar costes.
+  # ----------------------------------------------------------
+
+  route_settings {
+    route_key = aws_apigatewayv2_route.refrigeration_analysis.route_key
+
+    throttling_rate_limit  = 1
+    throttling_burst_limit = 2
+  }
+
+  # ----------------------------------------------------------
+  # TACHOGRAPH STATUS
+  #
+  # Consulta determinista. No utiliza Bedrock.
+  # ----------------------------------------------------------
 
   route_settings {
     route_key = aws_apigatewayv2_route.tachograph_status.route_key
@@ -87,27 +142,24 @@ resource "aws_apigatewayv2_stage" "default" {
     throttling_burst_limit = 5
   }
 
-  # Limita la generación de URLs de subida de documentos.
-  # Reduce abuso accidental y llamadas innecesarias a Lambda.
+  # ----------------------------------------------------------
+  # TACHOGRAPH ANALYSIS
+  #
+  # Esta ruta puede realizar una llamada a Bedrock.
+  # Aplicamos un límite más restrictivo para controlar costes.
+  # ----------------------------------------------------------
+
   route_settings {
-    route_key = aws_apigatewayv2_route.documents_upload_url.route_key
+    route_key = aws_apigatewayv2_route.tachograph_analysis.route_key
 
     throttling_rate_limit  = 1
     throttling_burst_limit = 2
   }
-
-  # Limita las consultas de estado de refrigeración.
-  # Evita abuso y protege Lambda ante picos de peticiones.
-  route_settings {
-    route_key = aws_apigatewayv2_route.refrigeration_status.route_key
-
-    throttling_rate_limit  = 2
-    throttling_burst_limit = 5
-  }
 }
 
+
 # ============================================================
-# Ruta HTTP
+# CHAT
 # POST /api/chat -> Lambda
 # ============================================================
 
@@ -120,6 +172,7 @@ resource "aws_apigatewayv2_route" "chat" {
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
+
 
 # ============================================================
 # JWT AUTHORIZER
@@ -142,6 +195,7 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
   }
 }
 
+
 # ============================================================
 # REFRIGERATION
 # GET /api/refrigeration/status -> Lambda
@@ -157,10 +211,55 @@ resource "aws_apigatewayv2_route" "refrigeration_status" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+
+# ============================================================
+# REFRIGERATION + IA
+# GET /api/refrigeration/analysis -> Lambda -> Bedrock
+#
+# La clasificación continúa realizándose mediante reglas
+# deterministas. Bedrock únicamente genera el análisis.
+# ============================================================
+
+resource "aws_apigatewayv2_route" "refrigeration_analysis" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  route_key = "GET /api/refrigeration/analysis"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+
+# ============================================================
+# TACHOGRAPH
+# GET /api/tachograph/status -> Lambda
+# ============================================================
+
 resource "aws_apigatewayv2_route" "tachograph_status" {
   api_id = aws_apigatewayv2_api.api.id
 
   route_key = "GET /api/tachograph/status"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+
+# ============================================================
+# TACHOGRAPH + IA
+# GET /api/tachograph/analysis -> Lambda -> Bedrock
+#
+# Las reglas de negocio determinan previamente la clasificación.
+# Bedrock únicamente interpreta los resultados y genera
+# recomendaciones.
+# ============================================================
+
+resource "aws_apigatewayv2_route" "tachograph_analysis" {
+  api_id = aws_apigatewayv2_api.api.id
+
+  route_key = "GET /api/tachograph/analysis"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 
   authorization_type = "JWT"

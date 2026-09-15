@@ -2,10 +2,16 @@ import os
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
-from services.refrigeration_service import get_refrigeration_status
+from services.refrigeration_service import (
+    generate_refrigeration_analysis,
+    get_refrigeration_status,
+)
+from services.tachograph_service import (
+    generate_tachograph_analysis,
+    get_tachograph_status,
+)
 from services.chat_service import process_message
 from services.document_service import generate_upload_post
-from services.tachograph_service import get_tachograph_status
 
 app = FastAPI(title="ia-serverless-app API", version="0.1.0")
 
@@ -133,6 +139,27 @@ def refrigeration_status():
     }
 
 
+@app.get("/api/refrigeration/analysis")
+def refrigeration_analysis():
+    return {
+        "analysis": generate_refrigeration_analysis(),
+    }
+
+
 @app.get("/api/tachograph/status")
 def tachograph_status():
     return {"drivers": get_tachograph_status()}
+
+
+@app.get("/api/refrigeration/analysis")
+def refrigeration_analysis():
+    return {
+        "analysis": generate_refrigeration_analysis(),
+    }
+
+
+@app.get("/api/tachograph/analysis")
+def tachograph_analysis():
+    return {
+        "analysis": generate_tachograph_analysis(),
+    }

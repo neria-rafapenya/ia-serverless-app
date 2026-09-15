@@ -72,3 +72,15 @@ variable "ingestion_max_chunks_per_document" {
   type        = number
   default     = 500
 }
+
+variable "refrigeration_source" {
+  description = "Fuente de datos del servicio de refrigeración"
+  type        = string
+  default     = "mock"
+}
+
+variable "tachograph_source" {
+  description = "Fuente de datos del servicio de tacógrafos"
+  type        = string
+  default     = "mock"
+}

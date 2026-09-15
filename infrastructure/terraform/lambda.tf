@@ -41,6 +41,8 @@ resource "aws_lambda_function" "api" {
     variables = {
       ENVIRONMENT                = var.environment
       AI_PROVIDER                = var.ai_provider
+      REFRIGERATION_SOURCE       = var.refrigeration_source
+      TACHOGRAPH_SOURCE          = var.tachograph_source
       BEDROCK_MODEL_ID           = var.bedrock_model_id
       DOCUMENTS_BUCKET           = aws_s3_bucket.documents.bucket
       INGESTION_MAX_FILE_SIZE_MB = tostring(var.ingestion_max_file_size_mb)
